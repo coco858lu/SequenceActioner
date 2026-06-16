@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>序列帧动作控制脚本 — 使用指南</title>
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --surface: #252526;
+    --surface2: #2d2d30;
+    --border: #3e3e42;
+    --text: #d4d4d4;
+    --text2: #9cdcfe;
+    --accent: #4ec9b0;
+    --warn: #ce9178;
+    --keyword: #569cd6;
+    --string: #ce9178;
+    --comment: #6a9955;
+    --number: #b5cea8;
+    --radius: 8px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.75;
+    padding: 40px 20px;
+  }
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+  }
+  h1 {
+    text-align: center;
+    font-size: 2em;
+    color: var(--text2);
+    margin-bottom: 8px;
+  }
+  .subtitle {
+    text-align: center;
+    color: var(--comment);
+    margin-bottom: 40px;
+    font-size: 0.95em;
+  }
+  h2 {
+    font-size: 1.35em;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 6px;
+    margin: 40px 0 16px;
+  }
+  h3 {
+    font-size: 1.1em;
+    color: var(--keyword);
+    margin: 24px 0 10px;
+  }
+  p { margin-bottom: 12px; }
+  ul, ol { padding-left: 24px; margin-bottom: 12px; }
+  li { margin-bottom: 6px; }
+  code {
+    background: var(--surface2);
+    color: var(--string);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.92em;
+  }
+  pre {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    overflow-x: auto;
+    font-size: 0.88em;
+    line-height: 1.55;
+    margin-bottom: 16px;
+  }
+  pre code {
+    background: transparent;
+    padding: 0;
+    color: var(--text);
+  }
+  .note, .warn, .tip {
+    padding: 12px 16px;
+    border-radius: var(--radius);
+    margin-bottom: 16px;
+    border-left: 4px solid;
+  }
+  .note { background: #1a3a4a; border-color: var(--keyword); }
+  .warn { background: #3d2e1a; border-color: var(--warn); }
+  .tip  { background: #1a3a2a; border-color: var(--comment); }
+  .step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px 20px;
+    margin-bottom: 12px;
+  }
+  .step strong { color: var(--accent); font-size: 1.05em; }
+  .step-num {
+    display: inline-block;
+    background: var(--accent);
+    color: #000;
+    width: 24px; height: 24px;
+    text-align: center; line-height: 24px;
+    border-radius: 50%;
+    font-weight: bold;
+    font-size: 0.85em;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 16px;
+  }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 8px 12px;
+    text-align: left;
+  }
+  th {
+    background: var(--surface2);
+    color: var(--keyword);
+  }
+  td code { background: none; color: var(--text2); }
+  a { color: var(--keyword); }
+  hr { border: none; border-top: 1px solid var(--border); margin: 40px 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>序列帧动作控制脚本</h1>
+<p class="subtitle">After Effects ExtendScript · 版本 v5 · 支持中文版 AE</p>
+
+<h2>一、脚本简介</h2>
+<p>
+  这是一个用于 <strong>Adobe After Effects</strong> 的 ExtendScript（JSX）脚本。
+  它能够将一个序列帧合成（包含多层序列帧的预合成）中的每一层读取为独立的"动作"，
+  生成一个<strong>下拉菜单控件</strong>，并自动在目标图层上写入<strong>时间重映射（Time Remap）表达式</strong>，
+  实现通过切换菜单来切换不同的序列帧动作。
+</p>
+
+<div class="tip">
+  <strong>核心流程：</strong>
+  选中序列帧合成 → 读取图层列表 → 编辑动作名称/帧数/循环 → 选中目标图层 → 确定应用
+</div>
+
+<h2>二、适用场景</h2>
+<ul>
+  <li>角色的多个动作（待机、走路、攻击、技能…）放在同一个序列帧合成里，需要在时间轴上自由切换</li>
+  <li>特效序列帧需要按不同状态播放不同片段</li>
+  <li>UI 动画中的多个状态切换</li>
+</ul>
+
+<h2>三、项目准备</h2>
+
+<h3>3.1 脚本安装</h3>
+<p>将 <code>.jsx</code> 文件放置在以下任一目录：</p>
+<table>
+  <tr><th>位置</th><th>路径</th><th>说明</th></tr>
+  <tr>
+    <td><strong>ScriptUI Panels</strong></td>
+    <td style="font-size:0.85em"><code>C:\Program Files\Adobe\Adobe After Effects <em>XXXX</em>\Support Files\Scripts\ScriptUI Panels\</code></td>
+    <td>放入后重启 AE，在<strong>"窗口"菜单底部</strong>可直接打开面板（推荐）</td>
+  </tr>
+  <tr>
+    <td><strong>Scripts 目录</strong></td>
+    <td style="font-size:0.85em"><code>C:\Program Files\Adobe\Adobe After Effects <em>XXXX</em>\Support Files\Scripts\</code></td>
+    <td>放入后通过 <strong>文件 → 脚本</strong> 菜单运行</td>
+  </tr>
+  <tr>
+    <td><strong>任意位置</strong></td>
+    <td>任意文件夹</td>
+    <td>通过 <strong>文件 → 脚本 → 运行脚本文件</strong> 手动选择</td>
+  </tr>
+</table>
+<div class="tip">
+  <strong>推荐：</strong>放在 <strong>ScriptUI Panels</strong> 文件夹，重启 AE 后可在 <strong>窗口</strong> 菜单中找到并作为面板常驻使用，最方便。
+</div>
+<div class="note">
+  <strong>Mac 用户路径：</strong><br>
+  <code>/Applications/Adobe After Effects <em>XXXX</em>/Scripts/ScriptUI Panels/</code>
+</div>
+
+<h3>3.2 序列帧合成结构</h3>
+<p>你需要先准备一个"序列帧合成"（也叫 Sprite Sheet / Flipbook 合成）：</p>
+<ul>
+  <li>合成中的每一层就是<strong>一个动作</strong>的一帧序列</li>
+  <li>层A（inPoint=0, outPoint=24帧） → 动作"待机"，24帧</li>
+  <li>层B（inPoint=24帧, outPoint=54帧） → 动作"走路"，30帧</li>
+  <li>层C（inPoint=54帧, outPoint=69帧） → 动作"攻击"，15帧</li>
+  <li>……以此类推</li>
+</ul>
+
+<div class="note">
+  <strong>注意：</strong>脚本会<strong>自动跳过空对象层、调节层和重名图层</strong>，
+  并按 <code>inPoint</code> 时间升序排列。如果两个图层同名，只会保留第一个。
+</div>
+
+<h3>3.3 主合成</h3>
+<p>在主合成中，将序列帧合成作为<strong>一个图层</strong>放入时间轴。脚本会在该图层上添加效果控件和表达式。</p>
+
+<h2>四、操作步骤</h2>
+
+<div class="step">
+  <strong><span class="step-num">1</span> 选中序列帧合成</strong>
+  <p>在 AE 的<strong>项目面板</strong>中，单击选中你准备好的序列帧合成。</p>
+</div>
+
+<div class="step">
+  <strong><span class="step-num">2</span> 运行脚本并读取图层</strong>
+  <p>通过 AE 菜单 <code>文件 → 脚本 → 运行脚本文件</code> 加载脚本。在弹出的面板中点击<strong>"读取图层列表"</strong>按钮。</p>
+  <p>脚本会解析序列帧合成中所有有效图层，显示在列表中。</p>
+</div>
+
+<div class="step">
+  <strong><span class="step-num">3</span> 编辑列表</strong>
+  <p>你可以在面板中直接编辑：</p>
+  <table>
+    <tr><th>列</th><th>说明</th></tr>
+    <tr><td><strong>图层名称</strong></td><td>作为下拉菜单中的选项名，可修改</td></tr>
+    <tr><td><strong>帧数</strong></td><td>该动作包含的总帧数，自动读取，可手动调整</td></tr>
+    <tr><td><strong>循环</strong></td><td>勾选后该动作循环播放；不勾选则播完后停在最后一帧</td></tr>
+  </table>
+</div>
+
+<div class="step">
+  <strong><span class="step-num">4</span> 选中目标图层并确定</strong>
+  <p>在<strong>时间轴面板</strong>中选中你的序列帧合成图层，回到脚本面板点击<strong>"确定"</strong>。</p>
+</div>
+
+<div class="step">
+  <strong><span class="step-num">5</span> 切换动作</strong>
+  <p>AE 会自动在目标图层上：</p>
+  <ul>
+    <li>添加一个<strong>下拉菜单控件</strong>（Dropdown Menu Control），选项即你的动作列表</li>
+    <li>启用<strong>时间重映射</strong>并写入表达式</li>
+  </ul>
+  <p>之后只需在效果控件面板切换下拉菜单，或给菜单打关键帧，即可切换动作。</p>
+</div>
+
+<h2>五、按钮说明</h2>
+
+<table>
+  <tr><th>按钮</th><th>功能</th></tr>
+  <tr><td><strong>读取图层列表</strong></td><td>从选中的合成中读取所有有效图层，填充到列表中。已有数据会被覆盖（注意保存修改）</td></tr>
+  <tr><td><strong>确定</strong></td><td>创建下拉菜单 + 启用时间重映射 + 写入表达式（首次配置用）</td></tr>
+  <tr><td><strong>更新</strong></td><td>只更新时间重映射表达式，不动已有控件（修改参数后用）</td></tr>
+</table>
+
+<div class="note">
+  <strong>确定 vs 更新 的区别：</strong><br>
+  <strong>确定</strong> 会重新创建下拉菜单控件并写表达式，适合首次配置或需要重建控件时。<br>
+  <strong>更新</strong> 只改写表达式，不会动已有的下拉菜单，适合只改了帧数或循环设置后快速刷新。<br>
+  <em>注意：如果你改了动作名称，需要用"确定"来重建菜单选项。</em>
+</div>
+
+<h2>六、强制不循环（!前缀）</h2>
+<p>
+  即使某个动作在列表中勾选了循环，你也可以在<strong>下拉菜单的关键帧值</strong>中
+  通过在动作名前加 <code>!</code> 前缀来<strong>临时禁用循环</strong>。
+</p>
+<p>例如：菜单关键帧值为 <code>!攻击</code>，则该动作将不循环播放（播完停在最后一帧），即便脚本面板中勾选了循环。</p>
+
+<h2>七、表达式逻辑说明</h2>
+<p>脚本生成的时间重映射表达式核心逻辑如下：</p>
+
+<pre><code>// 1. 读取下拉菜单当前值（支持关键帧）
+var menu = effect("下拉菜单控件")("菜单");
+
+// 2. 帧数和循环配置（直接硬编码，无需额外 Slider）
+var frameCounts = [24, 30, 15];
+var loopSettings = [false, true, false];
+
+// 3. 计算每个动作的起始帧偏移
+var startFrames = [0, 24, 54];
+
+// 4. 根据菜单值找到对应动作索引
+var idx = ...; // 通过菜单名字符串匹配
+
+// 5. 获取切换时间点（菜单最新关键帧的时间）
+var switchTime = ...;
+
+// 6. 计算当前帧
+//    - 循环模式：elapsed / frameDuration % cnt
+//    - 不循环模式：clamp 到最后一帧
+// 7. 返回 (startFrames[idx] + f) * thisComp.frameDuration</code></pre>
+
+<h2>八、预览示例</h2>
+
+<p>执行完成后，你的目标图层上会看到：</p>
+<ul>
+  <li>效果控件面板中新增 <strong>"下拉菜单控件"</strong>，点开可选择动作</li>
+  <li>时间轴中该图层的时间重映射已有表达式</li>
+  <li>给"下拉菜单控件"的"菜单"属性打关键帧，即可在不同时间切换不同动作</li>
+  <li>动作间切换是<strong>瞬间</strong>的（基于关键帧时间），无过渡</li>
+</ul>
+
+<div class="warn">
+  <strong>无法获取时间重映射？</strong><br>
+  如果脚本提示此错误，请手动在目标图层上右键 → <strong>时间 → 启用时间重映射</strong>，然后重新运行脚本。
+</div>
+
+<h2>九、常见问题</h2>
+
+<h3>Q: 图层太多，列表长了怎么办？</h3>
+<p>面板最多显示 <strong>20 行</strong>数据，视口可见 <strong>8 行</strong>。右侧有滚动条可以上下翻页。</p>
+
+<h3>Q: 改了帧数后不生效？</h3>
+<p>修改列表数据后必须点击<strong>"更新"</strong>或<strong>"确定"</strong>重新写入表达式，帧数才会生效。</p>
+
+<h3>Q: 中文版 / 英文版 AE 有什么区别？</h3>
+<p>脚本提供两个版本：</p>
+<ul>
+  <li><code>SequenceActioner_CN.jsx</code> — 适配中文版 AE（菜单属性名用"菜单"，Slider 用"滑块"）</li>
+  <li><code>SequenceActioner.jsx</code> — 适配英文版 AE（菜单属性名用"Menu"，Slider 用"Slider"）</li>
+</ul>
+
+<h3>Q: 空对象层、调节层会被读入吗？</h3>
+<p>不会，脚本会自动跳过 <code>nullLayer</code> 和 <code>adjustmentLayer</code>。</p>
+
+<hr>
+
+<h2>十、技术细节</h2>
+<table>
+  <tr><th>项目</th><th>说明</th></tr>
+  <tr><td>表达式类型</td><td>时间重映射表达式（Time Remap）</td></tr>
+  <tr><td>控件</td><td>下拉菜单控件（Dropdown Menu Control），仅一个</td></tr>
+  <tr><td>帧数存储</td><td>直接写入表达式，不创建额外 Slider 控件</td></tr>
+  <tr><td>排序依据</td><td>图层 inPoint 升序</td></tr>
+  <tr><td>去重逻辑</td><td>同名图层仅保留第一个</td></tr>
+  <tr><td>最大支持</td><td>20 个动作</td></tr>
+  <tr><td>兼容性</td><td>AE CS6+ / CC 全系列，Windows &amp; Mac</td></tr>
+  <tr><td>中文适配</td><td>自动 polyfill String.trim()，仅使用 AE 中文属性名</td></tr>
+</table>
+
+</div>
+</body>
+</html>
