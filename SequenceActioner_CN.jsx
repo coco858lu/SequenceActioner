@@ -141,6 +141,7 @@
 
     var executeBtn = btnGroup.add("button", undefined, "确定");
     var updateBtn = btnGroup.add("button", undefined, "更新");
+    var arrangeBtn = btnGroup.add("button", undefined, "自动排列");
 
     // 状态
     var statusText = win.add("statictext", undefined, "");
@@ -157,6 +158,7 @@
             var layer = comp.layer(i);
             if (layer.nullLayer) continue;
             if (layer.adjustmentLayer) continue;
+            if (layer.name.indexOf("*") === 0) continue; // 以 * 开头的图层忽略
             if (seen[layer.name]) continue;
             seen[layer.name] = true;
 
@@ -491,6 +493,40 @@
     }
 
     // ================================================
+    // 自动排列 — 将选中图层在时间线上首尾相接排列，并调整合成时长
+    // ================================================
+    function autoArrange() {
+        statusText.text = "";
+        var comp = app.project.activeItem;
+        if (!comp || !(comp instanceof CompItem)) {
+            alert("请先打开一个合成");
+            return;
+        }
+        var sel = comp.selectedLayers;
+        if (sel.length < 2) {
+            alert("请至少选中 2 个图层进行排列");
+            return;
+        }
+
+        app.beginUndoGroup("自动排列图层");
+
+        var offset = 0;
+        for (var i = 0; i < sel.length; i++) {
+            var layer = sel[i];
+            var layerDuration = layer.outPoint - layer.inPoint;
+            layer.startTime = offset;
+            offset += layerDuration;
+        }
+
+        // 调整合成时长为排列后的总时长
+        comp.duration = offset;
+
+        app.endUndoGroup();
+
+        statusText.text = "已排列 " + sel.length + " 个图层，合成时长: " + offset.toFixed(2) + " 秒";
+    }
+
+    // ================================================
     // 事件绑定
     // ================================================
 
@@ -567,6 +603,7 @@
 
     executeBtn.onClick = execute;
     updateBtn.onClick = updateExpression;
+    arrangeBtn.onClick = autoArrange;
 
     // ================================================
     // 显示窗口

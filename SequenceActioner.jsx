@@ -133,6 +133,7 @@
 
     var executeBtn = btnGroup.add("button", undefined, "确定");
     var updateBtn = btnGroup.add("button", undefined, "更新");
+    var arrangeBtn = btnGroup.add("button", undefined, "自动排列");
 
     // 状态
     var statusText = win.add("statictext", undefined, "");
@@ -149,6 +150,7 @@
             var layer = comp.layer(i);
             if (layer.nullLayer) continue;
             if (layer.adjustmentLayer) continue;
+            if (layer.name.indexOf("*") === 0) continue; // skip layers starting with *
             if (seen[layer.name]) continue;
             seen[layer.name] = true;
 
@@ -472,6 +474,39 @@
     }
 
     // ================================================
+    // Auto Arrange — place selected layers end-to-end and adjust comp duration
+    // ================================================
+    function autoArrange() {
+        statusText.text = "";
+        var comp = app.project.activeItem;
+        if (!comp || !(comp instanceof CompItem)) {
+            alert("请先打开一个合成");
+            return;
+        }
+        var sel = comp.selectedLayers;
+        if (sel.length < 2) {
+            alert("请至少选中 2 个图层进行排列");
+            return;
+        }
+
+        app.beginUndoGroup("Auto Arrange Layers");
+
+        var offset = 0;
+        for (var i = 0; i < sel.length; i++) {
+            var layer = sel[i];
+            var layerDuration = layer.outPoint - layer.inPoint;
+            layer.startTime = offset;
+            offset += layerDuration;
+        }
+
+        comp.duration = offset;
+
+        app.endUndoGroup();
+
+        statusText.text = "Auto-arranged " + sel.length + " layers, comp duration: " + offset.toFixed(2) + "s";
+    }
+
+    // ================================================
     // 事件绑定
     // ================================================
 
@@ -547,6 +582,7 @@
 
     executeBtn.onClick = execute;
     updateBtn.onClick = updateExpression;
+    arrangeBtn.onClick = autoArrange;
 
     // ================================================
     // 显示窗口
