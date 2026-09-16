@@ -5,6 +5,8 @@
 // 帧数直接写入表达式，无需 Slider 控件
 // ================================================
 (function() {
+    // Capture while this panel is loading; callback context may change $.fileName.
+    var sequenceScriptFolder = new File($.fileName).parent.fsName;
     var win = new Window("palette", "序列帧动作控制", undefined, {resizeable: true});
     win.orientation = "column";
     win.alignChildren = ["fill", "top"];
@@ -125,15 +127,28 @@
         loadViewportFromData();
     };
 
-    // 按钮行
+    // 两行按钮：确定 / 更新；自动排列 / 智能对齐
     var btnGroup = win.add("group");
-    btnGroup.orientation = "row";
+    btnGroup.orientation = "column";
     btnGroup.alignment = ["fill", "top"];
-    btnGroup.spacing = 10;
+    btnGroup.alignChildren = ["fill", "top"];
+    btnGroup.spacing = 8;
 
-    var executeBtn = btnGroup.add("button", undefined, "确定");
-    var updateBtn = btnGroup.add("button", undefined, "更新");
-    var arrangeBtn = btnGroup.add("button", undefined, "自动排列");
+    var primaryBtnRow = btnGroup.add("group");
+    primaryBtnRow.orientation = "row";
+    primaryBtnRow.alignment = ["fill", "top"];
+    primaryBtnRow.alignChildren = ["fill", "center"];
+    primaryBtnRow.spacing = 10;
+    var executeBtn = primaryBtnRow.add("button", undefined, "确定");
+    var updateBtn = primaryBtnRow.add("button", undefined, "更新");
+
+    var secondaryBtnRow = btnGroup.add("group");
+    secondaryBtnRow.orientation = "row";
+    secondaryBtnRow.alignment = ["fill", "top"];
+    secondaryBtnRow.alignChildren = ["fill", "center"];
+    secondaryBtnRow.spacing = 10;
+    var arrangeBtn = secondaryBtnRow.add("button", undefined, "自动排列");
+    var alignBtn = secondaryBtnRow.add("button", undefined, "智能对齐");
 
     // 状态
     var statusText = win.add("statictext", undefined, "");
@@ -507,6 +522,266 @@
     }
 
     // ================================================
+    // Smart first-frame alignment. The topmost selected layer is the reference.
+    // Only Position is changed; anchor points are never modified.
+    // ================================================
+    function quotePowerShellArg(value) {
+        return "'" + String(value).replace(/'/g, "''") + "'";
+    }
+
+    // Encode UTF-16LE so AE's command-line bridge never handles Unicode paths.
+    function encodePowerShellCommand(value) {
+        var alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        var bytes = [];
+        for (var i = 0; i < value.length; i++) {
+            var code = value.charCodeAt(i);
+            bytes.push(code & 255);
+            bytes.push((code >> 8) & 255);
+        }
+        var encoded = "";
+        for (var i = 0; i < bytes.length; i += 3) {
+            var a = bytes[i];
+            var b = i + 1 < bytes.length ? bytes[i + 1] : 0;
+            var c = i + 2 < bytes.length ? bytes[i + 2] : 0;
+            encoded += alphabet.charAt(a >> 2);
+            encoded += alphabet.charAt(((a & 3) << 4) | (b >> 4));
+            encoded += i + 1 < bytes.length ? alphabet.charAt(((b & 15) << 2) | (c >> 6)) : "=";
+            encoded += i + 2 < bytes.length ? alphabet.charAt(c & 63) : "=";
+        }
+        return encoded;
+    }
+
+    function getFootagePath(layer) {
+        try {
+            if (!(layer.source instanceof FootageItem)) return null;
+            if (!layer.source.file) return null;
+            return layer.source.file.fsName;
+        } catch (e) { return null; }
+    }
+
+    function getPositionProperty(layer) {
+        try {
+            return layer.property("ADBE Transform Group").property("ADBE Position");
+        } catch (e) { return null; }
+    }
+
+    function sourcePointToComp2D(layer, point) {
+        // Explicit 2D transform: sourcePointToComp can return NaN for footage.
+        var transform = layer.property("ADBE Transform Group");
+        var anchor = transform.property("ADBE Anchor Point").value;
+        var scale = transform.property("ADBE Scale").value;
+        var rotation = transform.property("ADBE Rotate Z").value * Math.PI / 180;
+        var position = transform.property("ADBE Position").value;
+        var x = (point[0] - anchor[0]) * scale[0] / 100;
+        var y = (point[1] - anchor[1]) * scale[1] / 100;
+        return [
+            position[0] + x * Math.cos(rotation) - y * Math.sin(rotation),
+            position[1] + x * Math.sin(rotation) + y * Math.cos(rotation)
+        ];
+    }
+
+    function offsetLayerPosition(layer, dx, dy) {
+        if (!isFinite(dx) || !isFinite(dy)) {
+            throw new Error("Invalid position offset for layer: " + layer.name);
+        }
+        var transform = layer.property("ADBE Transform Group");
+        var position = transform.property("ADBE Position");
+        if (position.dimensionsSeparated) {
+            var xPosition = transform.property("ADBE Position_0");
+            var yPosition = transform.property("ADBE Position_1");
+            xPosition.setValue(xPosition.value + dx);
+            yPosition.setValue(yPosition.value + dy);
+        } else {
+            var value = position.value;
+            position.setValue([value[0] + dx, value[1] + dy]);
+        }
+    }
+
+    function smartAlignFirstFrames() {
+        statusText.text = "";
+        var comp = app.project.activeItem;
+        if (!comp || !(comp instanceof CompItem)) {
+            alert("Open the composition containing the sequence layers first.");
+            return;
+        }
+        var selected = comp.selectedLayers;
+        if (selected.length < 2) {
+            alert("Select at least two sequence layers.\nThe topmost selected layer will be the reference.");
+            return;
+        }
+
+        var layers = [];
+        for (var i = 0; i < selected.length; i++) layers.push(selected[i]);
+        layers.sort(function(a, b) { return a.index - b.index; });
+
+        var referenceLayer = layers[0];
+        var referencePath = getFootagePath(referenceLayer);
+        if (!referencePath) {
+            alert("The reference layer must be a footage sequence with an accessible source file.");
+            return;
+        }
+        if (referenceLayer.threeDLayer || referenceLayer.parent !== null) {
+            alert("The reference layer must be 2D and have no parent.");
+            return;
+        }
+
+        var helperFile = new File(sequenceScriptFolder + "/SequenceAlignHelper.ps1");
+        if (!helperFile.exists) {
+            alert("Pixel-analysis helper not found:\n" + helperFile.fsName +
+                "\n\nKeep it in the same folder as the JSX script.");
+            return;
+        }
+
+        var targets = [];
+        var targetPaths = [];
+        var skippedBeforeMatch = 0;
+        for (var i = 1; i < layers.length; i++) {
+            var layer = layers[i];
+            var position = getPositionProperty(layer);
+            var path = getFootagePath(layer);
+            if (!path || layer.threeDLayer || layer.parent !== null || layer.locked || !position ||
+                position.numKeys > 0 || position.expressionEnabled) {
+                skippedBeforeMatch++;
+                continue;
+            }
+            targets.push(layer);
+            targetPaths.push(path);
+        }
+        if (targets.length === 0) {
+            alert("No eligible target layers were found.\nLayers must be 2D, unparented, unlocked, and their Position must have no keys or expression.");
+            return;
+        }
+
+        statusText.text = "正在后台匹配首帧…";
+        win.update();
+        var layoutFile = new File(helperFile.parent.fsName + "/SequenceLayoutUtils.jsx");
+        if (!layoutFile.exists) {
+            alert("Layout helper not found: " + layoutFile.fsName);
+            return;
+        }
+        // Read and evaluate inside this engine instead of converting an object
+        // returned through $.evalFile's host boundary.
+        var layoutUtils;
+        layoutFile.encoding = "UTF-8";
+        if (!layoutFile.open("r")) {
+            throw new Error("无法读取辅助脚本：" + layoutFile.fsName);
+        }
+        var layoutSource;
+        try {
+            layoutSource = layoutFile.read().replace(/^\uFEFF/, "");
+        } finally {
+            layoutFile.close();
+        }
+        try {
+            layoutUtils = eval(layoutSource);
+        } catch (loadError) {
+            throw new Error("辅助脚本加载失败：" + layoutFile.fsName +
+                "\\n" + loadError.toString() + "（行 " + loadError.line + "）");
+        }
+        if (!layoutUtils || typeof layoutUtils.runHiddenAsync !== "function" ||
+                typeof layoutUtils.fit !== "function" ||
+                typeof layoutUtils.fingerprint !== "function") {
+            throw new Error("辅助脚本接口无效：" + layoutFile.fsName);
+        }
+        var resultFile = new File(Folder.temp.fsName + "/SequenceAlign_" +
+            new Date().getTime() + "_" + Math.floor(Math.random() * 1000000) + ".txt");
+        var progressFile = new File(resultFile.fsName + ".progress");
+        var scriptCommand = "& " +
+            quotePowerShellArg(helperFile.fsName) + " -Reference " + quotePowerShellArg(referencePath) +
+            " -TargetList " + quotePowerShellArg(targetPaths.join("|")) +
+            " -OutputPath " + quotePowerShellArg(resultFile.fsName) +
+            " -ProgressPath " + quotePowerShellArg(progressFile.fsName);
+        var command = "powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand " +
+            encodePowerShellCommand(scriptCommand);
+        var initialState = layoutUtils.fingerprint(comp);
+        function reportError(error) {
+            statusText.text = "处理已停止。";
+            alignBtn.enabled = true;
+            alert("序列帧处理失败：\n" + error.toString());
+        }
+        layoutUtils.runHiddenAsync(command, {progressFile: progressFile,
+            onProgress: function(completed, total, elapsed) {
+                if (!win.visible) return;
+                var percent = Math.min(99, Math.floor(completed * 100 / total));
+                statusText.text = "正在匹配首帧：" + completed + " / " + total +
+                    " 个图层（" + percent + "%） · " + elapsed + " 秒";
+            }},
+            function() {
+                try {
+                    if (!win.visible || layoutUtils.fingerprint(comp) !== initialState)
+                        throw new Error("分析期间合成或图层发生变化，已取消应用结果。请重新运行。");
+                    var output = "";
+                    resultFile.encoding = "UTF-8";
+                    if (resultFile.exists && resultFile.open("r")) {
+                        output = resultFile.read().replace(/^\uFEFF/, "");
+                        resultFile.close();
+                        try { resultFile.remove(); } catch (e) {}
+                    }
+        var matches = {};
+        var lines = String(output).split(/\r?\n/);
+        for (var i = 0; i < lines.length; i++) {
+            var parts = lines[i].split("|");
+            if (parts.length >= 6 && parts[0] === "ALIGN") {
+                matches[parseInt(parts[1], 10)] = {
+                    dx: parseFloat(parts[2]),
+                    dy: parseFloat(parts[3]),
+                    confidence: parseFloat(parts[4])
+                };
+            }
+        }
+        if (String(output).indexOf("ALIGN|") < 0) {
+            alert("Pixel analysis returned no valid result.\n\n" +
+                (String(output) || "No result file was produced by the helper.") +
+                "\n\nReference: " + referencePath + "\nHelper: " + helperFile.fsName);
+            statusText.text = "";
+            throw new Error("匹配结果无效。");
+        }
+
+
+                    var aligned = 0, lowConfidence = 0, failed = 0;
+                    app.beginUndoGroup("首帧智能对齐");
+                    try {
+            for (var i = 0; i < targets.length; i++) {
+                var match = matches[i];
+                if (!match || isNaN(match.dx) || isNaN(match.dy)) {
+                    failed++;
+                    continue;
+                }
+                if (match.confidence < 0.15) {
+                    lowConfidence++;
+                    continue;
+                }
+                var targetLayer = targets[i];
+                var targetPoint = [targetLayer.source.width / 2, targetLayer.source.height / 2];
+                var referencePoint = [targetPoint[0] + match.dx, targetPoint[1] + match.dy];
+                var targetCompPoint = sourcePointToComp2D(targetLayer, targetPoint);
+                var referenceCompPoint = sourcePointToComp2D(referenceLayer, referencePoint);
+                offsetLayerPosition(targetLayer,
+                    referenceCompPoint[0] - targetCompPoint[0],
+                    referenceCompPoint[1] - targetCompPoint[1]);
+                aligned++;
+            }
+
+                    } finally { app.endUndoGroup(); }
+                    function complete(summary) {
+                        var skipped = skippedBeforeMatch + lowConfidence + failed;
+                        statusText.text = "已对齐 " + aligned + " 个图层，跳过 " + skipped +
+                            " 个\n参考: " + referenceLayer.name + (summary ? "\n合成尺寸: " + summary : "");
+                        alignBtn.enabled = true;
+                        if (lowConfidence > 0) alert(lowConfidence + " 个图层因匹配置信度不足未移动。");
+                    }
+                    if (!aligned) { complete(""); return; }
+                    statusText.text = "正在按素材尺寸适配合成…";
+                    layoutUtils.fit(comp, helperFile, encodePowerShellCommand, quotePowerShellArg,
+                        complete, function(error) {
+                            complete("未适配");
+                            alert("对齐已完成，但尺寸适配未完成：\n" + error.toString());
+                        });
+                } catch (error) { reportError(error); }
+            }, reportError);
+        return true;
+    }
+    // ================================================
     // 事件绑定
     // ================================================
 
@@ -583,6 +858,11 @@
     executeBtn.onClick = execute;
     updateBtn.onClick = updateExpression;
     arrangeBtn.onClick = autoArrange;
+    alignBtn.onClick = function() {
+        alignBtn.enabled = false;
+        try { if (smartAlignFirstFrames() !== true) alignBtn.enabled = true; }
+        catch (error) { alignBtn.enabled = true; alert(error.toString()); }
+    };
 
     // ================================================
     // 显示窗口
