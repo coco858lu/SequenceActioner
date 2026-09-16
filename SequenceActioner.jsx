@@ -23,8 +23,18 @@
     descText.alignment = "center";
     descText.multiline = true;
 
+    var pages = win.add("tabbedpanel");
+    pages.alignment = ["fill", "top"];
+    pages.alignChildren = ["fill", "top"];
+    var actionPage = pages.add("tab", undefined, "动作控制");
+    actionPage.orientation = "column";
+    actionPage.alignChildren = ["fill", "top"];
+    actionPage.margins = 10;
+    var presetPage = pages.add("tab", undefined, "预设");
+    pages.selection = actionPage;
+
     // 合成信息
-    var compGroup = win.add("panel", undefined, "选中合成");
+    var compGroup = actionPage.add("panel", undefined, "选中合成");
     compGroup.orientation = "column";
     compGroup.alignChildren = ["fill", "top"];
     compGroup.spacing = 8;
@@ -36,7 +46,7 @@
     var refreshBtn = compGroup.add("button", undefined, "读取图层列表");
 
     // 图层列表（可编辑）
-    var layerListGroup = win.add("panel", undefined, "图层列表");
+    var layerListGroup = actionPage.add("panel", undefined, "图层列表");
     layerListGroup.orientation = "column";
     layerListGroup.alignChildren = ["fill", "top"];
     layerListGroup.spacing = 6;
@@ -46,7 +56,8 @@
     headerGroup.orientation = "row";
     headerGroup.alignment = ["fill", "top"];
     headerGroup.spacing = 8;
-    headerGroup.add("statictext", [0, 0, 100, 20], "图层名称");
+    headerGroup.add("statictext", [0, 0, 50, 20], "切换");
+    headerGroup.add("statictext", [0, 0, 120, 20], "图层名称");
     headerGroup.add("statictext", [0, 0, 60, 20], "帧数");
     headerGroup.add("statictext", [0, 0, 40, 20], "循环");
 
@@ -81,11 +92,23 @@
         row.orientation = "row";
         row.alignment = ["fill", "top"];
         row.spacing = 8;
+        var switchBtn = row.add("button", [0, 0, 50, 22], "切换");
+        switchBtn.enabled = false;
+        switchBtn.viewportIndex = r;
+        switchBtn.onClick = function() {
+            try {
+                if (!alignBtn.enabled) throw new Error("智能对齐正在执行，请等待完成。");
+                saveViewportToData();
+                var context = selectedContext();
+                statusText.text = presetUtils.switchAction(context.comp, context.layer,
+                    scrollOffset + this.viewportIndex, layerData);
+            } catch (error) { alert(error.toString()); }
+        };
         var ni = row.add("edittext", [0, 0, 120, 22], "");
         var fi = row.add("edittext", [0, 0, 60, 22], "");
         var cb = row.add("checkbox", [0, 0, 50, 22], "");
         cb.value = false;
-        actionRows.push({ row: row, nameInput: ni, framesInput: fi, loopCheckbox: cb });
+        actionRows.push({ row: row, switchButton: switchBtn, nameInput: ni, framesInput: fi, loopCheckbox: cb });
     }
 
     // 把当前 8 行数据写回 layerData，防止编辑丢失
@@ -104,6 +127,7 @@
     function loadViewportFromData() {
         for (var i = 0; i < VISIBLE_ROWS; i++) {
             var dataIdx = scrollOffset + i;
+            actionRows[i].switchButton.enabled = dataIdx < layerData.length;
             if (dataIdx < layerData.length) {
                 actionRows[i].nameInput.text = layerData[dataIdx].name;
                 actionRows[i].framesInput.text = layerData[dataIdx].frames;
@@ -128,7 +152,7 @@
     };
 
     // 两行按钮：确定 / 更新；自动排列 / 智能对齐
-    var btnGroup = win.add("group");
+    var btnGroup = actionPage.add("group");
     btnGroup.orientation = "column";
     btnGroup.alignment = ["fill", "top"];
     btnGroup.alignChildren = ["fill", "top"];
@@ -154,6 +178,67 @@
     var statusText = win.add("statictext", undefined, "");
     statusText.alignment = "center";
     statusText.multiline = true;
+
+    // Shared preset/switch helper is evaluated within the panel engine.
+    var presetUtils;
+    try {
+        var presetHelper = new File(sequenceScriptFolder + "/SequencePresetUtils.jsx");
+        presetHelper.encoding = "UTF-8";
+        if (!presetHelper.open("r")) throw new Error("找不到预设辅助脚本：" + presetHelper.fsName);
+        var presetSource;
+        try { presetSource = presetHelper.read().replace(/^\uFEFF/, ""); }
+        finally { presetHelper.close(); }
+        presetUtils = eval(presetSource);
+        if (!presetUtils || typeof presetUtils.createUI !== "function") throw new Error("预设辅助脚本接口无效。");
+    } catch (error) { alert(error.toString()); return; }
+
+    function selectedContext() {
+        var comp = app.project.activeItem;
+        if (!(comp instanceof CompItem) || comp.selectedLayers.length !== 1)
+            throw new Error("请在当前合成中选中一个配置好的序列帧合成图层。");
+        var layer = comp.selectedLayers[0];
+        if (!(layer.source instanceof CompItem))
+            throw new Error("选中图层必须是序列帧合成。");
+        return {comp: comp, layer: layer};
+    }
+    function showActions(rows, target) {
+        layerData = [];
+        for (var i = 0; i < Math.min(rows.length, MAX_ROWS); i++)
+            layerData.push({name: rows[i].name, frames: String(rows[i].frames), loop: rows[i].loop});
+        totalLayerCount = layerData.length;
+        scrollOffset = 0;
+        scrollbar.value = 0;
+        scrollbar.maxvalue = Math.max(0, layerData.length - VISIBLE_ROWS);
+        loadViewportFromData();
+        compInfoText.text = "源合成：" + target.source.name + " — " + layerData.length + " 个动作";
+        pages.selection = actionPage;
+        win.layout.layout(true);
+    }
+    presetUtils.createUI(presetPage, function() {
+        saveViewportToData();
+        var context = selectedContext();
+        var configured = presetUtils.actions(context.layer);
+        if (layerData.length) {
+            if (configured.length !== layerData.length) throw new Error("请先更新目标配置，或重新读取目标图层。");
+            for (var i = 0; i < configured.length; i++)
+                if (configured[i].name !== layerData[i].name.replace(/^\s+|\s+$/g, "") ||
+                        Number(configured[i].frames) !== Number(layerData[i].frames) ||
+                        configured[i].loop !== layerData[i].loop)
+                    throw new Error("列表存在未应用的修改，请先点击“确定”或“更新”。");
+        }
+        return context;
+    }, function(target, rows, menuName) {
+        var names = [], counts = [], loops = [];
+        for (var i = 0; i < rows.length; i++) {
+            names.push(rows[i].name); counts.push(Number(rows[i].frames)); loops.push(rows[i].loop);
+        }
+        target.property("ADBE Time Remapping").expression = buildExpression(menuName, names, counts, loops);
+    }, showActions, function() {
+        layerData = []; totalLayerCount = 0; scrollOffset = 0;
+        scrollbar.value = 0; scrollbar.maxvalue = 0;
+        loadViewportFromData();
+        compInfoText.text = "原工程已恢复，请重新选中目标图层读取列表。";
+    }, function(message) { statusText.text = message; win.update(); }, function() { return !alignBtn.enabled; });
 
     // ================================================
     // 读取合成内的有效图层
@@ -204,14 +289,17 @@
     // ================================================
     // 构建时间重映射表达式
     // ================================================
+    function escapeExpressionText(value) {
+        return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+    }
     function buildExpression(menuName, actionNames, frameCounts, loopSettings) {
         var expr = "";
-        expr += "var menu = effect(\"" + menuName + "\")(\"Menu\");\n";
+        expr += "var menu = effect(\"" + escapeExpressionText(menuName) + "\")(\"Menu\");\n";
 
         expr += "var actionNames = [";
         for (var i = 0; i < actionNames.length; i++) {
             if (i > 0) expr += ", ";
-            expr += "\"" + actionNames[i] + "\"";
+            expr += "\"" + escapeExpressionText(actionNames[i]) + "\"";
         }
         expr += "];\n";
 
@@ -807,6 +895,13 @@
         }
 
         var sourceComp = selectedLayer.source;
+        try {
+            var configuredRows = presetUtils.actions(selectedLayer);
+            showActions(configuredRows, selectedLayer);
+            statusText.text = "已读取目标的动作设置。";
+            return;
+        } catch (unconfigured) {}
+
         var layers = getValidLayers(sourceComp);
 
         // 先清空视口
