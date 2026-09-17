@@ -1,27 +1,24 @@
 // ================================================
-// 序列帧动作控制脚本 v5
+// 序列帧动作控制脚本 · 中英文 AE 通用单文件版
 // 选中合成 → 刷新读取图层 → 编辑信息 → 确定应用
 // 在目标图层上添加时间重映射表达式、菜单
 // 帧数直接写入表达式，无需 Slider 控件
 // ================================================
-(function() {
-    // Capture while this panel is loading; callback context may change $.fileName.
-    var sequenceScriptFolder = new File($.fileName).parent.fsName;
-    var win = new Window("palette", "序列帧动作控制", undefined, {resizeable: true});
+(function(panelHost) {
+    // Single-file edition: property indices and matchNames are independent of AE language.
+    if (!String.prototype.trim) {
+        String.prototype.trim = function() { return this.replace(/^\s+|\s+$/g, ""); };
+    }
+    var presetUtils = createPresetUtils();
+    var layoutUtils = createLayoutUtils();
+    var isDocked = typeof Panel !== "undefined" && panelHost instanceof Panel;
+    var win = isDocked ? panelHost : new Window("palette", "序列帧动作控制", undefined, {resizeable: true});
+    function repaint() { if (typeof win.update === "function") win.update(); }
+    win.onResizing = win.onResize = function() { this.layout.resize(); };
     win.orientation = "column";
     win.alignChildren = ["fill", "top"];
     win.margins = [12, 12, 12, 12];
     win.spacing = 10;
-
-    // 标题
-    var titleText = win.add("statictext", undefined, "序列帧动作控制");
-    titleText.alignment = "center";
-    var tf = titleText.graphics.font;
-    titleText.graphics.font = ScriptUI.newFont(tf.name, ScriptUI.FontStyle.BOLD, tf.size + 4);
-
-    var descText = win.add("statictext", undefined, "在主合成中选中【序列帧合成】\n点击读取内部图层 → 编辑 → 确定应用");
-    descText.alignment = "center";
-    descText.multiline = true;
 
     var pages = win.add("tabbedpanel");
     pages.alignment = ["fill", "top"];
@@ -30,6 +27,7 @@
     actionPage.orientation = "column";
     actionPage.alignChildren = ["fill", "top"];
     actionPage.margins = 10;
+    actionPage.spacing = 6;
     var presetPage = pages.add("tab", undefined, "预设");
     pages.selection = actionPage;
 
@@ -43,7 +41,6 @@
     var compInfoText = compGroup.add("statictext", undefined, "请选中一个合成");
     compInfoText.alignment = "left";
 
-    var refreshBtn = compGroup.add("button", undefined, "读取图层列表");
 
     // 图层列表（可编辑）
     var layerListGroup = actionPage.add("panel", undefined, "图层列表");
@@ -56,7 +53,7 @@
     headerGroup.orientation = "row";
     headerGroup.alignment = ["fill", "top"];
     headerGroup.spacing = 8;
-    headerGroup.add("statictext", [0, 0, 50, 20], "切换");
+    var switchHeader = headerGroup.add("statictext", [0, 0, 120, 20], "切换");
     headerGroup.add("statictext", [0, 0, 120, 20], "图层名称");
     headerGroup.add("statictext", [0, 0, 60, 20], "帧数");
     headerGroup.add("statictext", [0, 0, 40, 20], "循环");
@@ -151,7 +148,7 @@
         loadViewportFromData();
     };
 
-    // 两行按钮：确定 / 更新；自动排列 / 智能对齐
+    // 两行按钮：确定 / 更新；智能对齐 / 自动排列
     var btnGroup = actionPage.add("group");
     btnGroup.orientation = "column";
     btnGroup.alignment = ["fill", "top"];
@@ -171,26 +168,30 @@
     secondaryBtnRow.alignment = ["fill", "top"];
     secondaryBtnRow.alignChildren = ["fill", "center"];
     secondaryBtnRow.spacing = 10;
-    var arrangeBtn = secondaryBtnRow.add("button", undefined, "自动排列");
     var alignBtn = secondaryBtnRow.add("button", undefined, "智能对齐");
+    var arrangeBtn = secondaryBtnRow.add("button", undefined, "自动排列");
+
+    var createControlBtn = actionPage.add("button", undefined, "创建动作控制合成");
+    createControlBtn.alignment = ["fill", "top"];
+    createControlBtn.helpTip = "先在合成 A 中对齐、排列动作，再一键创建包含 A 的控制合成 B，并读取动作列表。";
 
     // 状态
+    var progressRow = actionPage.add("group");
+    progressRow.alignment = ["fill", "top"];
+    progressRow.alignChildren = ["fill", "center"];
+    var alignProgress = progressRow.add("progressbar", undefined, 0, 100);
+    alignProgress.preferredSize = [310, 14];
+    alignProgress.enabled = false;
+    var progressPercent = progressRow.add("statictext", undefined, "就绪");
+    progressPercent.alignment = ["right", "center"];
+    progressPercent.preferredSize = [60, 20];
+    function showAlignProgress(value, label) {
+        alignProgress.value = value;
+        progressPercent.text = label;
+    }
     var statusText = win.add("statictext", undefined, "");
     statusText.alignment = "center";
     statusText.multiline = true;
-
-    // Shared preset/switch helper is evaluated within the panel engine.
-    var presetUtils;
-    try {
-        var presetHelper = new File(sequenceScriptFolder + "/SequencePresetUtils.jsx");
-        presetHelper.encoding = "UTF-8";
-        if (!presetHelper.open("r")) throw new Error("找不到预设辅助脚本：" + presetHelper.fsName);
-        var presetSource;
-        try { presetSource = presetHelper.read().replace(/^\uFEFF/, ""); }
-        finally { presetHelper.close(); }
-        presetUtils = eval(presetSource);
-        if (!presetUtils || typeof presetUtils.createUI !== "function") throw new Error("预设辅助脚本接口无效。");
-    } catch (error) { alert(error.toString()); return; }
 
     function selectedContext() {
         var comp = app.project.activeItem;
@@ -233,12 +234,17 @@
             names.push(rows[i].name); counts.push(Number(rows[i].frames)); loops.push(rows[i].loop);
         }
         target.property("ADBE Time Remapping").expression = buildExpression(menuName, names, counts, loops);
-    }, showActions, function() {
+    }, function(rows, target) {
+        showActions(rows, target);
+        recordLoadedSelection();
+    }, function() {
         layerData = []; totalLayerCount = 0; scrollOffset = 0;
+        loadedSelection = ""; loadedLayer = null; selectionDrafts = {};
+        watchedProject = app.project;
         scrollbar.value = 0; scrollbar.maxvalue = 0;
         loadViewportFromData();
         compInfoText.text = "原工程已恢复，请重新选中目标图层读取列表。";
-    }, function(message) { statusText.text = message; win.update(); }, function() { return !alignBtn.enabled; });
+    }, function(message) { statusText.text = message; repaint(); }, function() { return !alignBtn.enabled; });
 
     // ================================================
     // 读取合成内的有效图层
@@ -294,7 +300,7 @@
     }
     function buildExpression(menuName, actionNames, frameCounts, loopSettings) {
         var expr = "";
-        expr += "var menu = effect(\"" + escapeExpressionText(menuName) + "\")(\"Menu\");\n";
+        expr += "var menu = effect(\"" + escapeExpressionText(menuName) + "\")(1);\n";
 
         expr += "var actionNames = [";
         for (var i = 0; i < actionNames.length; i++) {
@@ -412,7 +418,7 @@
         }
 
         if (actionNames.length === 0) {
-            alert("请先读取图层列表，确保至少有一个有效图层");
+            alert("请选中序列帧合成图层，等待自动读取，确保至少有一个有效动作");
             return;
         }
 
@@ -434,7 +440,7 @@
             var dropdownIdx = -1;
             for (var i = 1; i <= effects.numProperties; i++) {
                 var ef = effects.property(i);
-                if (ef.matchName === "ADBE Dropdown Control") {
+                if (presetUtils.isDropdownEffect(ef)) {
                     hasDropdown = true;
                     dropdownIdx = i;
                 }
@@ -451,7 +457,7 @@
                 // setPropertyParameters 可能重建dropdown，扫描记录唯一的那个
                 var foundIdx = -1;
                 for (var i = 1; i <= effects.numProperties; i++) {
-                    if (effects.property(i).matchName === "ADBE Dropdown Control") {
+                    if (presetUtils.isDropdownEffect(effects.property(i))) {
                         if (foundIdx === -1) {
                             foundIdx = i;
                         } else {
@@ -466,7 +472,6 @@
                     if (!dropdownName) dropdownName = "Dropdown Menu Control";
                     // 添加关键帧
                     try { effects.property(foundIdx).property(1).setValueAtTime(targetLayer.inPoint, 1); } catch (e) {}
-                    try { effects.property(foundIdx).property("Menu").setValueAtTime(targetLayer.inPoint, 1); } catch (e) {}
                 }
             } else {
                 // 已存在，直接取当前名称，不碰它
@@ -540,7 +545,7 @@
             loopSettings.push(layerData[i].loop);
         }
         if (actionNames.length === 0) {
-            alert("列表为空，请先读取图层列表");
+            alert("列表为空，请选中序列帧合成图层，等待自动读取");
             return;
         }
 
@@ -549,7 +554,7 @@
         try {
             var effects = targetLayer.property("ADBE Effect Parade");
             for (var i = 1; i <= effects.numProperties; i++) {
-                if (effects.property(i).matchName === "ADBE Dropdown Control") {
+                if (presetUtils.isDropdownEffect(effects.property(i))) {
                     dropdownName = effects.property(i).name;
                     break;
                 }
@@ -606,7 +611,7 @@
 
         app.endUndoGroup();
 
-        statusText.text = "Auto-arranged " + sel.length + " layers, comp duration: " + offset.toFixed(2) + "s";
+        statusText.text = "已排列 " + sel.length + " 个图层，合成时长: " + offset.toFixed(2) + " 秒";
     }
 
     // ================================================
@@ -670,7 +675,7 @@
 
     function offsetLayerPosition(layer, dx, dy) {
         if (!isFinite(dx) || !isFinite(dy)) {
-            throw new Error("Invalid position offset for layer: " + layer.name);
+            throw new Error("图层位移计算无效: " + layer.name);
         }
         var transform = layer.property("ADBE Transform Group");
         var position = transform.property("ADBE Position");
@@ -689,12 +694,12 @@
         statusText.text = "";
         var comp = app.project.activeItem;
         if (!comp || !(comp instanceof CompItem)) {
-            alert("Open the composition containing the sequence layers first.");
+            alert("请先打开包含序列帧图层的合成。");
             return;
         }
         var selected = comp.selectedLayers;
         if (selected.length < 2) {
-            alert("Select at least two sequence layers.\nThe topmost selected layer will be the reference.");
+            alert("请至少选中 2 个序列帧图层。\n最上方的选中图层将作为参考。");
             return;
         }
 
@@ -705,18 +710,11 @@
         var referenceLayer = layers[0];
         var referencePath = getFootagePath(referenceLayer);
         if (!referencePath) {
-            alert("The reference layer must be a footage sequence with an accessible source file.");
+            alert("参考图层必须是有源文件的序列帧素材图层。");
             return;
         }
         if (referenceLayer.threeDLayer || referenceLayer.parent !== null) {
-            alert("The reference layer must be 2D and have no parent.");
-            return;
-        }
-
-        var helperFile = new File(sequenceScriptFolder + "/SequenceAlignHelper.ps1");
-        if (!helperFile.exists) {
-            alert("Pixel-analysis helper not found:\n" + helperFile.fsName +
-                "\n\nKeep it in the same folder as the JSX script.");
+            alert("参考图层必须是二维且没有父级。");
             return;
         }
 
@@ -736,44 +734,16 @@
             targetPaths.push(path);
         }
         if (targets.length === 0) {
-            alert("No eligible target layers were found.\nLayers must be 2D, unparented, unlocked, and their Position must have no keys or expression.");
+            alert("没有可对齐的目标图层。\n请确保图层是二维、无父级、未锁定，且位置没有关键帧或表达式。");
             return;
         }
 
         statusText.text = "正在后台匹配首帧…";
-        win.update();
-        var layoutFile = new File(helperFile.parent.fsName + "/SequenceLayoutUtils.jsx");
-        if (!layoutFile.exists) {
-            alert("Layout helper not found: " + layoutFile.fsName);
-            return;
-        }
-        // Read and evaluate inside this engine instead of converting an object
-        // returned through $.evalFile's host boundary.
-        var layoutUtils;
-        layoutFile.encoding = "UTF-8";
-        if (!layoutFile.open("r")) {
-            throw new Error("无法读取辅助脚本：" + layoutFile.fsName);
-        }
-        var layoutSource;
-        try {
-            layoutSource = layoutFile.read().replace(/^\uFEFF/, "");
-        } finally {
-            layoutFile.close();
-        }
-        try {
-            layoutUtils = eval(layoutSource);
-        } catch (loadError) {
-            throw new Error("辅助脚本加载失败：" + layoutFile.fsName +
-                "\\n" + loadError.toString() + "（行 " + loadError.line + "）");
-        }
-        if (!layoutUtils || typeof layoutUtils.runHiddenAsync !== "function" ||
-                typeof layoutUtils.fit !== "function" ||
-                typeof layoutUtils.fingerprint !== "function") {
-            throw new Error("辅助脚本接口无效：" + layoutFile.fsName);
-        }
+        repaint();
         var resultFile = new File(Folder.temp.fsName + "/SequenceAlign_" +
             new Date().getTime() + "_" + Math.floor(Math.random() * 1000000) + ".txt");
         var progressFile = new File(resultFile.fsName + ".progress");
+        var helperFile = createAlignmentWorker();
         var scriptCommand = "& " +
             quotePowerShellArg(helperFile.fsName) + " -Reference " + quotePowerShellArg(referencePath) +
             " -TargetList " + quotePowerShellArg(targetPaths.join("|")) +
@@ -783,16 +753,25 @@
             encodePowerShellCommand(scriptCommand);
         var initialState = layoutUtils.fingerprint(comp);
         function reportError(error) {
+            showAlignProgress(0, "已停止");
+            alignProgress.enabled = false;
             statusText.text = "处理已停止。";
             alignBtn.enabled = true;
             alert("序列帧处理失败：\n" + error.toString());
         }
-        layoutUtils.runHiddenAsync(command, {progressFile: progressFile,
+        layoutUtils.runHiddenAsync(command, {progressFile: progressFile, workerFile: helperFile,
+            onWaiting: function(elapsed) {
+                if (!win.visible) return;
+                statusText.text = "正在启动后台分析… · " + elapsed + " 秒";
+                repaint();
+            },
             onProgress: function(completed, total, elapsed) {
                 if (!win.visible) return;
-                var percent = Math.min(99, Math.floor(completed * 100 / total));
-                statusText.text = "正在匹配首帧：" + completed + " / " + total +
-                    " 个图层（" + percent + "%） · " + elapsed + " 秒";
+                var percent = Math.max(0, Math.min(99, Math.floor(completed * 100 / total)));
+                showAlignProgress(percent, percent + "%");
+                var phase = completed <= total / 2 ? "首帧匹配" : "交叉核验";
+                statusText.text = phase + " · " + completed + "/" + total + " · 已用 " + elapsed + " 秒";
+                repaint();
             }},
             function() {
                 try {
@@ -805,10 +784,13 @@
                         resultFile.close();
                         try { resultFile.remove(); } catch (e) {}
                     }
-        var matches = {};
+        var matches = {}, matchErrors = {}, skippedDetails = [];
         var lines = String(output).split(/\r?\n/);
         for (var i = 0; i < lines.length; i++) {
             var parts = lines[i].split("|");
+            if (parts[0] === "ERROR" && parts.length >= 3) {
+                matchErrors[parseInt(parts[1], 10)] = parts.slice(2).join(" / ");
+            }
             if (parts.length >= 6 && parts[0] === "ALIGN") {
                 matches[parseInt(parts[1], 10)] = {
                     dx: parseFloat(parts[2]),
@@ -818,11 +800,11 @@
             }
         }
         if (String(output).indexOf("ALIGN|") < 0) {
-            alert("Pixel analysis returned no valid result.\n\n" +
-                (String(output) || "No result file was produced by the helper.") +
-                "\n\nReference: " + referencePath + "\nHelper: " + helperFile.fsName);
-            statusText.text = "";
-            throw new Error("匹配结果无效。");
+            var messages = [];
+            for (var i = 0; i < targets.length; i++)
+                if (matchErrors[i]) messages.push(targets[i].name + "：" + matchErrors[i]);
+            throw new Error("首帧匹配未产生可用结果：\n" +
+                (messages.length ? messages.join("\n") : String(output) || "后台未生成结果文件。"));
         }
 
 
@@ -831,12 +813,14 @@
                     try {
             for (var i = 0; i < targets.length; i++) {
                 var match = matches[i];
-                if (!match || isNaN(match.dx) || isNaN(match.dy)) {
+                if (!match || !isFinite(match.dx) || !isFinite(match.dy) || !isFinite(match.confidence)) {
                     failed++;
+                    skippedDetails.push(targets[i].name + "：" + (matchErrors[i] || "结果无效"));
                     continue;
                 }
                 if (match.confidence < 0.15) {
                     lowConfidence++;
+                    skippedDetails.push(targets[i].name + "：颜色纹理核验不足或存在多个相近候选，未移动");
                     continue;
                 }
                 var targetLayer = targets[i];
@@ -852,13 +836,17 @@
 
                     } finally { app.endUndoGroup(); }
                     function complete(summary) {
+                        showAlignProgress(100, "完成");
+                        alignProgress.enabled = false;
                         var skipped = skippedBeforeMatch + lowConfidence + failed;
                         statusText.text = "已对齐 " + aligned + " 个图层，跳过 " + skipped +
                             " 个\n参考: " + referenceLayer.name + (summary ? "\n合成尺寸: " + summary : "");
                         alignBtn.enabled = true;
-                        if (lowConfidence > 0) alert(lowConfidence + " 个图层因匹配置信度不足未移动。");
+                        if (skippedDetails.length) alert("以下图层未移动：\n" + skippedDetails.join("\n") +
+                            "\n\n姿势或特效差异较大时，请手动确定参考点。");
                     }
                     if (!aligned) { complete(""); return; }
+                    showAlignProgress(99, "99%");
                     statusText.text = "正在按素材尺寸适配合成…";
                     layoutUtils.fit(comp, helperFile, encodePowerShellCommand, quotePowerShellArg,
                         complete, function(error) {
@@ -874,26 +862,19 @@
     // ================================================
 
     // 刷新：读取选中图层指向的源合成内的图层，填入预创建行
-    refreshBtn.onClick = function() {
+    function manualRead() {
         var comp = app.project.activeItem;
         if (!comp || !(comp instanceof CompItem)) {
             compInfoText.text = "请先打开一个合成";
             return;
         }
 
-        var sel = comp.selectedLayers;
-        if (sel.length === 0) {
-            compInfoText.text = "请在时间轴中选中【序列帧合成】图层";
+        var selection = contextSelection();
+        if (!selection) {
+            compInfoText.text = "请在时间轴中选中一个【序列帧合成】图层";
             return;
         }
-
-        var selectedLayer = sel[0];
-
-        if (!(selectedLayer.source instanceof CompItem)) {
-            compInfoText.text = "选中的图层 \"" + selectedLayer.name + "\" 不是合成";
-            return;
-        }
-
+        var selectedLayer = selection.layer;
         var sourceComp = selectedLayer.source;
         try {
             var configuredRows = presetUtils.actions(selectedLayer);
@@ -955,13 +936,1463 @@
     arrangeBtn.onClick = autoArrange;
     alignBtn.onClick = function() {
         alignBtn.enabled = false;
-        try { if (smartAlignFirstFrames() !== true) alignBtn.enabled = true; }
-        catch (error) { alignBtn.enabled = true; alert(error.toString()); }
+        alignProgress.enabled = true;
+        showAlignProgress(0, "0%");
+        statusText.text = "正在准备智能对齐…";
+        repaint();
+        try {
+            if (smartAlignFirstFrames() !== true) {
+                alignBtn.enabled = true;
+                alignProgress.enabled = false;
+                showAlignProgress(0, "就绪");
+            }
+        } catch (error) {
+            alignBtn.enabled = true;
+            alignProgress.enabled = false;
+            showAlignProgress(0, "已停止");
+            alert(error.toString());
+        }
     };
+
+    // Lightweight selection watching: only read layers after the selected target changes.
+    var loadedSelection = "", loadedSignature = "", loadedLayer = null;
+    var selectionDrafts = {}, watchedProject = null;
+    function rowSignature() {
+        var values = [];
+        for (var i = 0; i < layerData.length; i++)
+            values.push(layerData[i].name, layerData[i].frames, layerData[i].loop);
+        return values.join("\u0001");
+    }
+    function contextSelection() {
+        var comp = app.project ? app.project.activeItem : null;
+        if (!(comp instanceof CompItem)) return null;
+        var selected = comp.selectedLayers, layer = null;
+        if (selected.length === 1 && selected[0].source instanceof CompItem) layer = selected[0];
+        // Imported preset host comps have one configured precomp layer. Merely
+        // changing their timeline tab should work even if that layer is not selected.
+        if (!layer && selected.length === 0 && comp.numLayers === 1) {
+            var onlyLayer = comp.layer(1);
+            if (onlyLayer.source instanceof CompItem) {
+                try { presetUtils.actions(onlyLayer); layer = onlyLayer; } catch (e) {}
+            }
+        }
+        if (!layer) return null;
+        if (!(layer.source instanceof CompItem)) return null;
+        // Layer.id is unavailable before AE 22. Use the index on older versions.
+        var layerKey = typeof layer.id !== "undefined" ? layer.id : "index_" + layer.index;
+        return {comp: comp, layer: layer, key: comp.id + ":" + layerKey + ":" + layer.source.id};
+    }
+    function copyRows(rows) {
+        var result = [];
+        for (var i = 0; i < rows.length; i++)
+            result.push({name: rows[i].name, frames: String(rows[i].frames), loop: rows[i].loop});
+        return result;
+    }
+    function recordLoadedSelection() {
+        var selected = contextSelection();
+        loadedSelection = selected ? selected.key : "";
+        loadedLayer = selected ? selected.layer : null;
+        loadedSignature = rowSignature();
+        watchedProject = app.project;
+        if (loadedSelection) delete selectionDrafts[loadedSelection];
+    }
+    function rememberDraft() {
+        if (!loadedSelection || !loadedLayer) return;
+        saveViewportToData();
+        if (rowSignature() !== loadedSignature) {
+            try {
+                selectionDrafts[loadedSelection] = {rows: copyRows(layerData),
+                    expression: loadedLayer.property("ADBE Time Remapping").expression};
+            } catch (e) { selectionDrafts[loadedSelection] = {rows: copyRows(layerData), expression: ""}; }
+        }
+    }
+    function readSelectedActions() {
+        manualRead();
+        recordLoadedSelection();
+    };
+    createControlBtn.onClick = function() {
+        try {
+            if (!alignBtn.enabled) throw new Error("智能对齐正在执行，请等待完成。");
+            var source = app.project.activeItem;
+            if (!(source instanceof CompItem)) throw new Error("请先打开或选中已经对齐、排列好的动作序列帧合成 A。");
+            if (/^SequenceActionerControl\|/.test(source.comment || ""))
+                throw new Error("当前已经是动作控制合成 B。请先进入内部的动作序列帧合成 A。");
+            var valid = getValidLayers(source);
+            if (!valid.length) throw new Error("当前合成没有可读取的动作图层。");
+            if (valid.length > MAX_ROWS) throw new Error("动作数超过 " + MAX_ROWS + "，请先拆分动作组。");
+            for (var i = 1; i <= source.numLayers; i++) {
+                var layer = source.layer(i), configured = false;
+                try { configured = presetUtils.actions(layer).length > 0; } catch (e) {}
+                if (configured) throw new Error("当前是已配置动作菜单的控制合成。请进入其内部的动作序列帧合成 A，再创建。");
+            }
+            var baseName = source.name + "_动作控制", name = baseName, suffix = 2;
+            var names = {};
+            for (var i = 1; i <= app.project.numItems; i++) names["n_" + app.project.item(i).name] = true;
+            while (names["n_" + name]) name = baseName + "_" + suffix++;
+            var created = null, target = null;
+            app.beginUndoGroup("创建动作控制合成");
+            try {
+                created = app.project.items.addComp(name, source.width, source.height,
+                    source.pixelAspect, source.duration, source.frameRate);
+                created.parentFolder = source.parentFolder;
+                created.bgColor = source.bgColor;
+                created.comment = "SequenceActionerControl|" + source.id;
+                target = created.layers.add(source);
+                target.name = source.name;
+                target.startTime = 0;
+                target.inPoint = 0;
+                target.outPoint = source.duration;
+                target.selected = true;
+            } catch (e) {
+                if (created) { try { created.remove(); } catch (cleanupError) {} }
+                throw e;
+            } finally { app.endUndoGroup(); }
+            rememberDraft();
+            created.openInViewer();
+            pages.selection = actionPage;
+            readSelectedActions();
+            statusText.text = "已创建：" + name + "\n请勾选循环动作，然后点击“确定”。";
+            win.layout.layout(true);
+            repaint();
+        } catch (e) { alert("创建动作控制合成失败：\n" + e.toString()); }
+    };
+    function followSelection() {
+        if (!alignBtn.enabled) return;
+        if (watchedProject !== app.project) {
+            selectionDrafts = {};
+            loadedSelection = ""; loadedLayer = null;
+            watchedProject = app.project;
+        }
+        var selected = contextSelection();
+        if (!selected || selected.key === loadedSelection) return;
+        rememberDraft();
+        var draft = selectionDrafts[selected.key];
+        var activeTab = pages.selection;
+        manualRead();
+        recordLoadedSelection();
+        if (draft) {
+            var expression = "";
+            try { expression = selected.layer.property("ADBE Time Remapping").expression; } catch (e) {}
+            if (draft.expression === expression) {
+                showActions(draft.rows, selected.layer);
+                statusText.text = "已恢复该图层尚未应用的编辑。";
+            }
+        }
+        // Updating the action data must not depend on ScriptUI host-object identity,
+        // nor force the user out of the preset tab.
+        pages.selection = activeTab;
+        repaint();
+    }
+    function watchSelection() {
+        if (!$.global.__SequenceActionerWatchers) $.global.__SequenceActionerWatchers = {};
+        var registry = $.global.__SequenceActionerWatchers;
+        for (var old in registry) {
+            if (registry.hasOwnProperty(old)) registry[old].stop();
+        }
+        var id = "panel_" + new Date().getTime() + "_" + Math.floor(Math.random() * 1000000);
+        var task = null, stopped = false;
+        function stop() {
+            stopped = true;
+            if (task !== null) { try { app.cancelTask(task); } catch (e) {} }
+            delete registry[id];
+        }
+        function schedule() {
+            if (!stopped) task = app.scheduleTask("$.global.__SequenceActionerWatchers['" + id + "'].poll();", 600, false);
+        }
+        registry[id] = {stop: stop, poll: function() {
+            if (stopped) return;
+            try {
+                followSelection();
+            } catch (e) {
+                statusText.text = "自动读取暂未成功：" + e.toString() + "（将自动重试）";
+            }
+            schedule();
+        }};
+        if (!isDocked) win.onClose = function() { stop(); return true; };
+        schedule();
+    }
+
+    function createAlignmentWorker() {
+        var file = new File(Folder.temp.fsName + "/SequenceActioner_Worker_" +
+            new Date().getTime() + "_" + Math.floor(Math.random() * 1000000000) + ".ps1");
+        var source = [
+            "param(",
+            "    [string]$Reference = \"\",",
+            "",
+            "    [Parameter(Mandatory = $true)]",
+            "    [string]$TargetList,",
+            "",
+            "    [string]$OutputPath = \"\",",
+            "    [switch]$BoundsOnly,",
+            "    [string]$FrameCounts = \"\",",
+            "    [string]$ProgressPath = \"\"",
+            ")",
+            "",
+            "$ErrorActionPreference = \"Stop\"",
+            "try {",
+            "    [System.Diagnostics.Process]::GetCurrentProcess().PriorityClass = \"BelowNormal\"",
+            "}",
+            "catch { } # Do not fail analysis if process priority cannot be changed.",
+            "",
+            "$source = @'",
+            "using System;",
+            "using System.Drawing;",
+            "using System.Drawing.Drawing2D;",
+            "using System.Drawing.Imaging;",
+            "using System.Numerics;",
+            "using System.Runtime.InteropServices;",
+            "using System.IO;",
+            "using System.Text.RegularExpressions;",
+            "using System.Collections.Generic;",
+            "",
+            "public sealed class AlignmentResult",
+            "{",
+            "    public double Dx;",
+            "    public double Dy;",
+            "    public double Confidence;",
+            "    public double PeakZ;",
+            "    public int Support;",
+            "    public double Margin;",
+            "}",
+            "",
+            "public static class SpriteFirstFrameAligner",
+            "{",
+            "    private const int MaxAnalysisDimension = 1024;",
+            "",
+            "    public static void ReportProgress(string path, int completed, int total)",
+            "    {",
+            "        if (String.IsNullOrEmpty(path)) return;",
+            "        try { File.WriteAllText(path, completed + \"|\" + total); }",
+            "        catch (IOException) { } // UI can briefly hold the file while reading.",
+            "    }",
+            "",
+            "    public static Rectangle SequenceBounds(string firstPath, int count, string progressPath, int completedBase, int total)",
+            "    {",
+            "        count = Math.Max(1, count);",
+            "        string directory = Path.GetDirectoryName(firstPath);",
+            "        Match name = Regex.Match(Path.GetFileName(firstPath), @\"^(.*?)(\\d+)(\\.[^.]+)$\");",
+            "        if (count > 1 && !name.Success)",
+            "            throw new InvalidOperationException(\"Cannot determine sequence filenames.\");",
+            "        long first = name.Success ? Int64.Parse(name.Groups[2].Value) : 0;",
+            "        Rectangle union = Rectangle.Empty;",
+            "        for (int frame = 0; frame < count; frame++)",
+            "        {",
+            "            ReportProgress(progressPath, completedBase + frame, total);",
+            "            string path = frame == 0 ? firstPath : Path.Combine(directory,",
+            "                name.Groups[1].Value + (first + frame).ToString(\"D\" + name.Groups[2].Value.Length) + name.Groups[3].Value);",
+            "            using (Bitmap original = new Bitmap(path))",
+            "            using (Bitmap bitmap = Resize(original, 1.0))",
+            "            {",
+            "                Rectangle bounds;",
+            "                try { bounds = FindAlphaBounds(bitmap); }",
+            "                catch (InvalidOperationException) { continue; }",
+            "                union = union.IsEmpty ? bounds : Rectangle.Union(union, bounds);",
+            "            }",
+            "        }",
+            "        ReportProgress(progressPath, completedBase + count, total);",
+            "        return union;",
+            "    }",
+            "",
+            "    public static AlignmentResult Match(string referencePath, string targetPath)",
+            "    {",
+            "        using (Bitmap referenceOriginal = new Bitmap(referencePath))",
+            "        using (Bitmap targetOriginal = new Bitmap(targetPath))",
+            "        using (Bitmap referenceFull = Resize(referenceOriginal, 1.0))",
+            "        using (Bitmap targetFull = Resize(targetOriginal, 1.0))",
+            "        {",
+            "            Rectangle referenceBounds = FindAlphaBounds(referenceFull);",
+            "            Rectangle targetBounds = FindAlphaBounds(targetFull);",
+            "            using (Bitmap referenceCrop = referenceFull.Clone(referenceBounds, PixelFormat.Format32bppArgb))",
+            "            using (Bitmap targetCrop = targetFull.Clone(targetBounds, PixelFormat.Format32bppArgb))",
+            "            {",
+            "            int maxDimension = Math.Max(",
+            "                Math.Max(referenceCrop.Width, referenceCrop.Height),",
+            "                Math.Max(targetCrop.Width, targetCrop.Height));",
+            "            double scale = maxDimension > MaxAnalysisDimension",
+            "                ? (double)MaxAnalysisDimension / maxDimension",
+            "                : 1.0;",
+            "",
+            "            using (Bitmap reference = Resize(referenceCrop, scale))",
+            "            using (Bitmap target = Resize(targetCrop, scale))",
+            "            {",
+            "                // Linear-correlation padding prevents large offsets from wrapping",
+            "                // around to the opposite side of the FFT's periodic canvas.",
+            "                int width = NextPowerOfTwo(reference.Width + target.Width - 1);",
+            "                int height = NextPowerOfTwo(reference.Height + target.Height - 1);",
+            "",
+            "                var candidates = new List<Point>();",
+            "                PhaseCandidates(reference, target, width, height, false, candidates);",
+            "                PhaseCandidates(reference, target, width, height, true, candidates);",
+            "                // Geometric candidates are proposals only, never unchecked fallbacks.",
+            "                candidates.Add(new Point(0, 0));",
+            "                candidates.Add(new Point((reference.Width - target.Width) / 2, reference.Height - target.Height));",
+            "                int[] refPixels = ReadPixels(reference), targetPixels = ReadPixels(target);",
+            "                List<Point> featureOffsets = FeatureCandidates(refPixels, reference.Width, reference.Height,",
+            "                    targetPixels, target.Width, target.Height, candidates);",
+            "                double best = -1, second = -1, agreement = 0, coverage = 0;",
+            "                Point chosen = Point.Empty;",
+            "                var evaluated = new List<Point>();",
+            "                foreach (Point point in candidates) {",
+            "                    if (evaluated.Contains(point)) continue;",
+            "                    evaluated.Add(point);",
+            "                    double agree, cover;",
+            "                    double score = Verify(refPixels, reference.Width, reference.Height,",
+            "                        targetPixels, target.Width, target.Height, point.X, point.Y, out agree, out cover);",
+            "                    if (score > best) {",
+            "                        if (Math.Abs(point.X - chosen.X) + Math.Abs(point.Y - chosen.Y) > 5) second = best;",
+            "                        best = score; chosen = point; agreement = agree; coverage = cover;",
+            "                    } else if (Math.Abs(point.X - chosen.X) + Math.Abs(point.Y - chosen.Y) > 5 && score > second) second = score;",
+            "                }",
+            "                // Recover one-pixel precision around a phase candidate.",
+            "                Point initial = chosen;",
+            "                for (int dy = -2; dy <= 2; dy++) for (int dx = -2; dx <= 2; dx++) {",
+            "                    double agree, cover;",
+            "                    double score = Verify(refPixels, reference.Width, reference.Height,",
+            "                        targetPixels, target.Width, target.Height, initial.X + dx, initial.Y + dy, out agree, out cover);",
+            "                    if (score > best) {",
+            "                        best = score; chosen = new Point(initial.X + dx, initial.Y + dy);",
+            "                        agreement = agree; coverage = cover;",
+            "                    }",
+            "                }",
+            "                // Independent RGB/neighborhood agreement rejects silhouette-only false peaks.",
+            "                second = -1;",
+            "                foreach (Point point in evaluated) {",
+            "                    if (Math.Abs(point.X - chosen.X) + Math.Abs(point.Y - chosen.Y) <= 5) continue;",
+            "                    double ignoredAgreement, ignoredCoverage;",
+            "                    double other = Verify(refPixels, reference.Width, reference.Height,",
+            "                        targetPixels, target.Width, target.Height, point.X, point.Y, out ignoredAgreement, out ignoredCoverage);",
+            "                    if (other > second) second = other;",
+            "                }",
+            "                int support = FeatureSupport(featureOffsets, chosen);",
+            "                bool reliable = coverage >= 0.35 && (second < best * 0.94 || best > 0.65) &&",
+            "                    ((agreement >= 0.32 && best >= 0.23) ||",
+            "                     (agreement >= 0.15 && best >= 0.14 && support >= 8));",
+            "                return new AlignmentResult {",
+            "                    Dx = Math.Round(chosen.X / scale) + referenceBounds.X - targetBounds.X,",
+            "                    Dy = Math.Round(chosen.Y / scale) + referenceBounds.Y - targetBounds.Y,",
+            "                    Confidence = reliable ? Math.Min(1, best) : 0,",
+            "                    PeakZ = agreement, Support = support, Margin = best - second",
+            "                };",
+            "            }",
+            "            }",
+            "        }",
+            "    }",
+            "",
+            "    private sealed class Feature {",
+            "        public int X, Y;",
+            "        public double Strength;",
+            "        public int[] Patch;",
+            "    }",
+            "",
+            "    private static List<Feature> Features(int[] pixels, int width, int height) {",
+            "        var result = new List<Feature>();",
+            "        for (int top = 3; top < height - 3; top += 10) for (int left = 3; left < width - 3; left += 10) {",
+            "            Feature best = null;",
+            "            for (int y = top; y < Math.Min(top + 10, height - 3); y++)",
+            "                for (int x = left; x < Math.Min(left + 10, width - 3); x++) {",
+            "                    int p = y * width + x;",
+            "                    if ((uint)pixels[p] >> 24 < 200) continue;",
+            "                    double gx = ColorDistance(pixels[p - 1], pixels[p + 1]);",
+            "                    double gy = ColorDistance(pixels[p - width], pixels[p + width]);",
+            "                    double strength = Math.Min(gx, gy);",
+            "                    if (strength < 40 || (best != null && strength <= best.Strength)) continue;",
+            "                    var patch = new int[9];",
+            "                    int index = 0;",
+            "                    bool valid = true;",
+            "                    for (int dy = -2; dy <= 2; dy += 2) for (int dx = -2; dx <= 2; dx += 2) {",
+            "                        int sample = pixels[(y + dy) * width + x + dx];",
+            "                        if ((uint)sample >> 24 < 200) valid = false;",
+            "                        patch[index++] = sample;",
+            "                    }",
+            "                    if (valid) best = new Feature {X=x, Y=y, Strength=strength, Patch=patch};",
+            "                }",
+            "            if (best != null) result.Add(best);",
+            "        }",
+            "        result.Sort(delegate(Feature a, Feature b) {return b.Strength.CompareTo(a.Strength);});",
+            "        if (result.Count > 1000) result.RemoveRange(1000, result.Count - 1000);",
+            "        return result;",
+            "    }",
+            "",
+            "    private static int FeatureSupport(List<Point> offsets, Point shift) {",
+            "        int count = 0;",
+            "        foreach (Point point in offsets)",
+            "            if (Math.Abs(point.X - shift.X) <= 2 && Math.Abs(point.Y - shift.Y) <= 2) count++;",
+            "        return count;",
+            "    }",
+            "",
+            "    private static List<Point> FeatureCandidates(int[] a, int aw, int ah, int[] b, int bw, int bh, List<Point> candidates) {",
+            "        List<Feature> refs = Features(a, aw, ah), targets = Features(b, bw, bh);",
+            "        var offsets = new List<Point>();",
+            "        foreach (Feature target in targets) {",
+            "            double best = Double.MaxValue, second = Double.MaxValue;",
+            "            Feature chosen = null;",
+            "            foreach (Feature reference in refs) {",
+            "                if (ColorDistance(reference.Patch[4], target.Patch[4]) > 100) continue;",
+            "                double distance = 0;",
+            "                for (int i = 0; i < 9; i++) distance += ColorDistance(reference.Patch[i], target.Patch[i]);",
+            "                if (distance < best) {second = best; best = distance; chosen = reference;}",
+            "                else if (distance < second) second = distance;",
+            "            }",
+            "            // Ambiguous repeated ornaments must not contribute votes.",
+            "            if (chosen != null && best <= 540 && second < Double.MaxValue && best < second * 0.65)",
+            "                offsets.Add(new Point(chosen.X - target.X, chosen.Y - target.Y));",
+            "        }",
+            "        var histogram = new Dictionary<Point, int>();",
+            "        foreach (Point point in offsets) {",
+            "            Point bin = new Point((int)Math.Floor(point.X / 4.0), (int)Math.Floor(point.Y / 4.0));",
+            "            histogram[bin] = histogram.ContainsKey(bin) ? histogram[bin] + 1 : 1;",
+            "        }",
+            "        var ranked = new List<KeyValuePair<Point, int>>(histogram);",
+            "        ranked.Sort(delegate(KeyValuePair<Point, int> x, KeyValuePair<Point, int> y) {return y.Value.CompareTo(x.Value);});",
+            "        for (int i = 0; i < Math.Min(8, ranked.Count); i++) {",
+            "            int sumX = 0, sumY = 0, count = 0;",
+            "            Point bin = ranked[i].Key;",
+            "            foreach (Point point in offsets) {",
+            "                if ((int)Math.Floor(point.X / 4.0) != bin.X || (int)Math.Floor(point.Y / 4.0) != bin.Y) continue;",
+            "                sumX += point.X; sumY += point.Y; count++;",
+            "            }",
+            "            candidates.Add(new Point((int)Math.Round((double)sumX / count), (int)Math.Round((double)sumY / count)));",
+            "        }",
+            "        return offsets;",
+            "    }",
+            "",
+            "    private static void PhaseCandidates(Bitmap reference, Bitmap target, int width, int height, bool texture, List<Point> candidates)",
+            "    {",
+            "        Complex[] a = BuildSignal(reference, width, height, texture);",
+            "        Complex[] b = BuildSignal(target, width, height, texture);",
+            "        Transform2D(a, width, height, false);",
+            "        Transform2D(b, width, height, false);",
+            "        for (int i = 0; i < a.Length; i++) {",
+            "            Complex cross = Complex.Conjugate(b[i]) * a[i];",
+            "            a[i] = cross.Magnitude > 1e-12 ? cross / cross.Magnitude : Complex.Zero;",
+            "        }",
+            "        Transform2D(a, width, height, true);",
+            "        var peaks = new List<KeyValuePair<double, Point>>();",
+            "        for (int y = 0; y < height; y++) for (int x = 0; x < width; x++) {",
+            "            int sx = x > width / 2 ? x - width : x;",
+            "            int sy = y > height / 2 ? y - height : y;",
+            "            if (sx <= -target.Width || sx >= reference.Width || sy <= -target.Height || sy >= reference.Height) continue;",
+            "            double value = a[y * width + x].Real;",
+            "            if (peaks.Count == 16 && value <= peaks[15].Key) continue;",
+            "            if (value < a[y * width + (x + width - 1) % width].Real ||",
+            "                value < a[y * width + (x + 1) % width].Real ||",
+            "                value < a[((y + height - 1) % height) * width + x].Real ||",
+            "                value < a[((y + 1) % height) * width + x].Real) continue;",
+            "            int pos = 0;",
+            "            while (pos < peaks.Count && peaks[pos].Key > value) pos++;",
+            "            peaks.Insert(pos, new KeyValuePair<double, Point>(value, new Point(sx, sy)));",
+            "            if (peaks.Count > 16) peaks.RemoveAt(16);",
+            "        }",
+            "        foreach (var peak in peaks) candidates.Add(peak.Value);",
+            "    }",
+            "",
+            "    private static int[] ReadPixels(Bitmap bitmap)",
+            "    {",
+            "        BitmapData data = bitmap.LockBits(new Rectangle(0, 0, bitmap.Width, bitmap.Height),",
+            "            ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);",
+            "        try {",
+            "            int stride = Math.Abs(data.Stride);",
+            "            byte[] bytes = new byte[stride * bitmap.Height];",
+            "            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);",
+            "            int[] pixels = new int[bitmap.Width * bitmap.Height];",
+            "            for (int y = 0; y < bitmap.Height; y++) for (int x = 0; x < bitmap.Width; x++) {",
+            "                int row = (data.Stride >= 0 ? y : bitmap.Height - 1 - y) * stride;",
+            "                int p = row + x * 4;",
+            "                pixels[y * bitmap.Width + x] = bytes[p] | bytes[p + 1] << 8 | bytes[p + 2] << 16 | bytes[p + 3] << 24;",
+            "            }",
+            "            return pixels;",
+            "        } finally { bitmap.UnlockBits(data); }",
+            "    }",
+            "",
+            "    private static double ColorDistance(int a, int b)",
+            "    {",
+            "        return Math.Abs((a & 255) - (b & 255)) +",
+            "            Math.Abs(((a >> 8) & 255) - ((b >> 8) & 255)) +",
+            "            Math.Abs(((a >> 16) & 255) - ((b >> 16) & 255));",
+            "    }",
+            "",
+            "    private static double Verify(int[] a, int aw, int ah, int[] b, int bw, int bh,",
+            "        int dx, int dy, out double agreement, out double coverage)",
+            "    {",
+            "        double opaqueA = 0, opaqueB = 0, overlap = 0, matches = 0;",
+            "        for (int y = 1; y < ah - 1; y += 2) for (int x = 1; x < aw - 1; x += 2)",
+            "            if ((uint)a[y * aw + x] >> 24 >= 128) opaqueA++;",
+            "        for (int y = 1; y < bh - 1; y += 2) for (int x = 1; x < bw - 1; x += 2) {",
+            "            int bp = y * bw + x;",
+            "            if ((uint)b[bp] >> 24 < 128) continue;",
+            "            opaqueB++;",
+            "            int rx = x + dx, ry = y + dy;",
+            "            if (rx < 1 || ry < 1 || rx >= aw - 1 || ry >= ah - 1) continue;",
+            "            int ap = ry * aw + rx;",
+            "            if ((uint)a[ap] >> 24 < 128) continue;",
+            "            overlap++;",
+            "            // Three neighboring color samples discriminate shared details from flat-color coincidence.",
+            "            double distance = ColorDistance(a[ap], b[bp]);",
+            "            double neighborhood = ColorDistance(a[ap - 1], b[bp - 1]) + ColorDistance(a[ap + aw], b[bp + bw]);",
+            "            if (distance <= 90 && neighborhood <= 200) matches++;",
+            "        }",
+            "        coverage = overlap / Math.Max(1, Math.Min(opaqueA, opaqueB));",
+            "        agreement = matches / Math.Max(1, overlap);",
+            "        if (matches < 32) return 0;",
+            "        return agreement * Math.Sqrt(Math.Min(1, coverage));",
+            "    }",
+            "",
+            "    private static Rectangle FindAlphaBounds(Bitmap bitmap)",
+            "    {",
+            "        double[] alpha = ReadAlpha(bitmap);",
+            "        int minX = bitmap.Width;",
+            "        int minY = bitmap.Height;",
+            "        int maxX = -1;",
+            "        int maxY = -1;",
+            "        for (int y = 0; y < bitmap.Height; y++)",
+            "        {",
+            "            int row = y * bitmap.Width;",
+            "            for (int x = 0; x < bitmap.Width; x++)",
+            "            {",
+            "                if (alpha[row + x] < 8.0 / 255.0) continue;",
+            "                minX = Math.Min(minX, x);",
+            "                minY = Math.Min(minY, y);",
+            "                maxX = Math.Max(maxX, x);",
+            "                maxY = Math.Max(maxY, y);",
+            "            }",
+            "        }",
+            "        if (maxX < 0) throw new InvalidOperationException(\"First frame is fully transparent; alignment is undefined.\");",
+            "        return new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);",
+            "    }",
+            "",
+            "    private static Bitmap Resize(Bitmap source, double scale)",
+            "    {",
+            "        if (scale >= 0.999999)",
+            "        {",
+            "            Bitmap copy = new Bitmap(source.Width, source.Height, PixelFormat.Format32bppArgb);",
+            "            using (Graphics graphics = Graphics.FromImage(copy))",
+            "            {",
+            "                graphics.CompositingMode = CompositingMode.SourceCopy;",
+            "                graphics.DrawImageUnscaled(source, 0, 0);",
+            "            }",
+            "            return copy;",
+            "        }",
+            "",
+            "        int width = Math.Max(1, (int)Math.Round(source.Width * scale));",
+            "        int height = Math.Max(1, (int)Math.Round(source.Height * scale));",
+            "        Bitmap resized = new Bitmap(width, height, PixelFormat.Format32bppArgb);",
+            "        using (Graphics graphics = Graphics.FromImage(resized))",
+            "        {",
+            "            graphics.CompositingMode = CompositingMode.SourceCopy;",
+            "            graphics.InterpolationMode = InterpolationMode.HighQualityBilinear;",
+            "            graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;",
+            "            graphics.DrawImage(source, new Rectangle(0, 0, width, height));",
+            "        }",
+            "        return resized;",
+            "    }",
+            "",
+            "    private static Complex[] BuildSignal(Bitmap bitmap, int paddedWidth, int paddedHeight, bool texture)",
+            "    {",
+            "        double[] alpha = ReadAlpha(bitmap);",
+            "        Complex[] signal = new Complex[paddedWidth * paddedHeight];",
+            "",
+            "        int[] pixels = texture ? ReadPixels(bitmap) : null;",
+            "        // Keep alpha and interior texture as separate hypotheses; effects must not dominate both.",
+            "        for (int y = 0; y < bitmap.Height; y++)",
+            "        {",
+            "            int srcRow = y * bitmap.Width;",
+            "            int dstRow = y * paddedWidth;",
+            "            for (int x = 0; x < bitmap.Width; x++)",
+            "            {",
+            "                double center = alpha[srcRow + x];",
+            "                double left = x > 0 ? alpha[srcRow + x - 1] : 0.0;",
+            "                double up = y > 0 ? alpha[srcRow - bitmap.Width + x] : 0.0;",
+            "                double edge = Math.Abs(center - left) + Math.Abs(center - up);",
+            "                double value = center + edge * 0.65;",
+            "                if (texture) {",
+            "                    int pixel = pixels[srcRow + x];",
+            "                    double gx = x > 0 && left > 0.5 ? ColorDistance(pixel, pixels[srcRow + x - 1]) / 765.0 : 0;",
+            "                    double gy = y > 0 && up > 0.5 ? ColorDistance(pixel, pixels[srcRow + x - bitmap.Width]) / 765.0 : 0;",
+            "                    value = center > 0.5 ? (gx + gy) * 4.0 : 0;",
+            "                }",
+            "                signal[dstRow + x] = new Complex(value, 0.0);",
+            "            }",
+            "        }",
+            "        return signal;",
+            "    }",
+            "",
+            "    private static double[] ReadAlpha(Bitmap bitmap)",
+            "    {",
+            "        Rectangle rect = new Rectangle(0, 0, bitmap.Width, bitmap.Height);",
+            "        BitmapData data = bitmap.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);",
+            "        try",
+            "        {",
+            "            int stride = Math.Abs(data.Stride);",
+            "            byte[] bytes = new byte[stride * bitmap.Height];",
+            "            Marshal.Copy(data.Scan0, bytes, 0, bytes.Length);",
+            "            double[] alpha = new double[bitmap.Width * bitmap.Height];",
+            "            for (int y = 0; y < bitmap.Height; y++)",
+            "            {",
+            "                int sourceY = data.Stride >= 0 ? y : bitmap.Height - 1 - y;",
+            "                int row = sourceY * stride;",
+            "                int targetRow = y * bitmap.Width;",
+            "                for (int x = 0; x < bitmap.Width; x++)",
+            "                {",
+            "                    alpha[targetRow + x] = bytes[row + x * 4 + 3] / 255.0;",
+            "                }",
+            "            }",
+            "            return alpha;",
+            "        }",
+            "        finally",
+            "        {",
+            "            bitmap.UnlockBits(data);",
+            "        }",
+            "    }",
+            "",
+            "    private static int NextPowerOfTwo(int value)",
+            "    {",
+            "        int result = 1;",
+            "        while (result < value) result <<= 1;",
+            "        return result;",
+            "    }",
+            "",
+            "    private static void Transform2D(Complex[] values, int width, int height, bool inverse)",
+            "    {",
+            "        Complex[] buffer = new Complex[Math.Max(width, height)];",
+            "",
+            "        for (int y = 0; y < height; y++)",
+            "        {",
+            "            int row = y * width;",
+            "            Array.Copy(values, row, buffer, 0, width);",
+            "            Transform1D(buffer, width, inverse);",
+            "            Array.Copy(buffer, 0, values, row, width);",
+            "        }",
+            "",
+            "        for (int x = 0; x < width; x++)",
+            "        {",
+            "            for (int y = 0; y < height; y++) buffer[y] = values[y * width + x];",
+            "            Transform1D(buffer, height, inverse);",
+            "            for (int y = 0; y < height; y++) values[y * width + x] = buffer[y];",
+            "        }",
+            "    }",
+            "",
+            "    private static void Transform1D(Complex[] values, int length, bool inverse)",
+            "    {",
+            "        int j = 0;",
+            "        for (int i = 1; i < length; i++)",
+            "        {",
+            "            int bit = length >> 1;",
+            "            while ((j & bit) != 0)",
+            "            {",
+            "                j ^= bit;",
+            "                bit >>= 1;",
+            "            }",
+            "            j ^= bit;",
+            "            if (i < j)",
+            "            {",
+            "                Complex temp = values[i];",
+            "                values[i] = values[j];",
+            "                values[j] = temp;",
+            "            }",
+            "        }",
+            "",
+            "        for (int block = 2; block <= length; block <<= 1)",
+            "        {",
+            "            double angle = (inverse ? 2.0 : -2.0) * Math.PI / block;",
+            "            Complex step = new Complex(Math.Cos(angle), Math.Sin(angle));",
+            "            int half = block >> 1;",
+            "            for (int start = 0; start < length; start += block)",
+            "            {",
+            "                Complex factor = Complex.One;",
+            "                for (int k = 0; k < half; k++)",
+            "                {",
+            "                    Complex even = values[start + k];",
+            "                    Complex odd = values[start + k + half] * factor;",
+            "                    values[start + k] = even + odd;",
+            "                    values[start + k + half] = even - odd;",
+            "                    factor *= step;",
+            "                }",
+            "            }",
+            "        }",
+            "",
+            "        if (inverse)",
+            "        {",
+            "            for (int i = 0; i < length; i++) values[i] /= length;",
+            "        }",
+            "    }",
+            "}",
+            "'@",
+            "",
+            "$resultLines = New-Object 'System.Collections.Generic.List[string]'",
+            "try {",
+            "    Add-Type -TypeDefinition $source -ReferencedAssemblies @(",
+            "        \"System.Drawing\",",
+            "        \"System.Numerics\"",
+            "    )",
+            "}",
+            "catch {",
+            "    $resultLines.Add(\"ERROR|-1|\" + $_.Exception.Message.Replace(\"`r\", \" \").Replace(\"`n\", \" \"))",
+            "    if ($OutputPath) {",
+            "        [System.IO.File]::WriteAllLines($OutputPath, $resultLines.ToArray(), [System.Text.Encoding]::UTF8)",
+            "    }",
+            "    else { $resultLines | ForEach-Object { [Console]::WriteLine($_) } }",
+            "    exit 1",
+            "}",
+            "",
+            "$Targets = $TargetList.Split([char]'|')",
+            "$counts = $FrameCounts.Split([char]',')",
+            "$boundsCache = @{}",
+            "$alignmentResults = @{}",
+            "$alignmentRows = @{}",
+            "$completedFrames = 0",
+            "$totalFrames = 0",
+            "if ($BoundsOnly) {",
+            "    foreach ($value in $counts) { $totalFrames += if ($value) { [Math]::Max(1, [int]$value) } else { 1 } }",
+            "}",
+            "else { $totalFrames = $Targets.Count * 2 }",
+            "[SpriteFirstFrameAligner]::ReportProgress($ProgressPath, 0, $totalFrames)",
+            "",
+            "for ($index = 0; $index -lt $Targets.Count; $index++) {",
+            "    try {",
+            "        if ($BoundsOnly) {",
+            "            $count = if ($index -lt $counts.Count -and $counts[$index]) { [int]$counts[$index] } else { 1 }",
+            "            $key = $Targets[$index] + \"|\" + $count",
+            "            if (-not $boundsCache.ContainsKey($key)) {",
+            "                $boundsCache[$key] = [SpriteFirstFrameAligner]::SequenceBounds($Targets[$index], $count, $ProgressPath, $completedFrames, $totalFrames)",
+            "            }",
+            "            $bounds = $boundsCache[$key]",
+            "            $resultLines.Add(\"BOUNDS|\" + $index + \"|\" + $bounds.X + \"|\" + $bounds.Y + \"|\" + $bounds.Width + \"|\" + $bounds.Height)",
+            "            $completedFrames += $count",
+            "            [SpriteFirstFrameAligner]::ReportProgress($ProgressPath, $completedFrames, $totalFrames)",
+            "            continue",
+            "        }",
+            "        $result = [SpriteFirstFrameAligner]::Match($Reference, $Targets[$index])",
+            "        $alignmentResults[$index] = $result",
+            "        $alignmentRows[$index] = $resultLines.Count",
+            "        $resultLines.Add([string]::Format(",
+            "            [System.Globalization.CultureInfo]::InvariantCulture,",
+            "            \"ALIGN|{0}|{1:R}|{2:R}|{3:R}|{4:R}|{5}|{6:R}\",",
+            "            @($index, $result.Dx, $result.Dy, $result.Confidence, $result.PeakZ, $result.Support, $result.Margin)",
+            "        ))",
+            "    }",
+            "    catch {",
+            "        $message = $_.Exception.Message.Replace(\"`r\", \" \").Replace(\"`n\", \" \").Replace(\"|\", \"/\")",
+            "        $resultLines.Add(\"ERROR|\" + $index + \"|\" + $message)",
+            "        if ($BoundsOnly) { $completedFrames += [Math]::Max(1, $count) }",
+            "    }",
+            "    [SpriteFirstFrameAligner]::ReportProgress($ProgressPath, $(if ($BoundsOnly) { $completedFrames } else { $index + 1 }), $totalFrames)",
+            "}",
+            "",
+            "# For weak direct matches, use only independently verified direct anchors.",
+            "# Require agreement from at least two paths; never propagate a chain of guesses.",
+            "if (-not $BoundsOnly) {",
+            "    $anchors = @()",
+            "    for ($anchorIndex = 0; $anchorIndex -lt $Targets.Count; $anchorIndex++) {",
+            "        if ($alignmentResults.ContainsKey($anchorIndex) -and",
+            "            $alignmentResults[$anchorIndex].Confidence -ge 0.23 -and $Targets[$anchorIndex] -ne $Reference) {",
+            "            $anchors += $anchorIndex",
+            "        }",
+            "    }",
+            "    for ($index = 0; $index -lt $Targets.Count; $index++) {",
+            "        [SpriteFirstFrameAligner]::ReportProgress($ProgressPath, $Targets.Count + $index, $totalFrames)",
+            "        if (-not $alignmentResults.ContainsKey($index) -or $alignmentResults[$index].Confidence -ge 0.15) { continue }",
+            "        $hypotheses = @()",
+            "        foreach ($anchorIndex in @($anchors | Select-Object -First 6)) {",
+            "            try {",
+            "                $link = [SpriteFirstFrameAligner]::Match($Targets[$anchorIndex], $Targets[$index])",
+            "                if ($link.Confidence -lt 0.15) { continue }",
+            "                $anchor = $alignmentResults[$anchorIndex]",
+            "                $hypotheses += [pscustomobject]@{",
+            "                    Dx = $anchor.Dx + $link.Dx",
+            "                    Dy = $anchor.Dy + $link.Dy",
+            "                    Confidence = [Math]::Min($anchor.Confidence, $link.Confidence)",
+            "                    Agreement = $link.PeakZ",
+            "                    Support = $link.Support",
+            "                    Margin = $link.Margin",
+            "                }",
+            "            } catch { } # A failed intermediate comparison cannot invalidate direct matches.",
+            "        }",
+            "        $bestCluster = @()",
+            "        foreach ($proposal in $hypotheses) {",
+            "            $cluster = @($hypotheses | Where-Object {",
+            "                [Math]::Abs($_.Dx - $proposal.Dx) -le 4 -and [Math]::Abs($_.Dy - $proposal.Dy) -le 4",
+            "            })",
+            "            if ($cluster.Count -gt $bestCluster.Count) { $bestCluster = $cluster }",
+            "        }",
+            "        if ($bestCluster.Count -lt 2) { continue }",
+            "        $mid = [int][Math]::Floor($bestCluster.Count / 2)",
+            "        $dx = @($bestCluster | Sort-Object Dx)[$mid].Dx",
+            "        $dy = @($bestCluster | Sort-Object Dy)[$mid].Dy",
+            "        $quality = @($bestCluster | Sort-Object Confidence)[0]",
+            "        $resultLines[$alignmentRows[$index]] = [string]::Format(",
+            "            [System.Globalization.CultureInfo]::InvariantCulture,",
+            "            \"ALIGN|{0}|{1:R}|{2:R}|{3:R}|{4:R}|{5}|{6:R}|CONSENSUS\",",
+            "            @($index, $dx, $dy, $quality.Confidence, $quality.Agreement, $quality.Support, $quality.Margin))",
+            "    }",
+            "    [SpriteFirstFrameAligner]::ReportProgress($ProgressPath, $totalFrames, $totalFrames)",
+            "}",
+            "",
+            "if ($OutputPath) {",
+            "    [System.IO.File]::WriteAllLines($OutputPath, $resultLines.ToArray(), [System.Text.Encoding]::UTF8)",
+            "}",
+            "else {",
+            "    $resultLines | ForEach-Object { [Console]::WriteLine($_) }",
+            "}",
+            ""
+        ].join("\n");
+        file.encoding = "UTF-8";
+        if (!file.open("w")) throw new Error("无法创建智能对齐临时程序：" + file.fsName);
+        try {
+            // UTF-8 BOM lets Windows PowerShell 5 read Chinese source correctly.
+            file.write("\uFEFF" + source);
+        } finally { file.close(); }
+        return file;
+    }
+
+// Action switching and portable project presets. Shared by both language panels.
+function createPresetUtils() {
+    var markerPrefix = "[序列帧结束] ";
+    function read(file) {
+        file.encoding = "UTF-8";
+        if (!file.open("r")) throw new Error("无法读取：" + file.fsName);
+        try { return file.read().replace(/^\uFEFF/, ""); }
+        finally { file.close(); }
+    }
+    function write(file, text) {
+        file.encoding = "UTF-8";
+        if (!file.open("w")) throw new Error("无法写入：" + file.fsName);
+        try { file.write(text); } finally { file.close(); }
+    }
+    function isDropdownEffect(effect) {
+        if (!effect) return false;
+        try { if (effect.property(1).isDropdownEffect === true) return true; } catch (e) {}
+        return effect.matchName === "ADBE Dropdown Control";
+    }
+    function dropdown(layer) {
+        var effects = layer.property("ADBE Effect Parade"), found = null;
+        var remap = layer.property("ADBE Time Remapping");
+        var reference = remap && /var\s+menu\s*=\s*effect\("((?:\\.|[^"\\])*)"\)/.exec(remap.expression);
+        var referencedName = reference ? reference[1].replace(/\\(["\\])/g, "$1") : null;
+        if (effects) for (var i = 1; i <= effects.numProperties; i++) {
+            var effect = effects.property(i);
+            // Custom menu parameters can change the effect matchName to Pseudo/...
+            if (referencedName && effect.name === referencedName) {
+                if (!isDropdownEffect(effect)) {
+                    var menu = effect.property(1);
+                    if (!menu || menu.isDropdownEffect === false || !/^Pseudo\//.test(effect.matchName) ||
+                            !/^(Menu|菜单)$/.test(menu.name))
+                        throw new Error("表达式引用的控件不是动作下拉菜单：" + referencedName);
+                }
+                return effect;
+            }
+            if (isDropdownEffect(effect)) {
+                if (found) found = false;
+                else if (found !== false) found = effect;
+            }
+        }
+        if (referencedName) throw new Error("找不到表达式引用的动作菜单：" + referencedName + "。请检查控件是否被删除或改名。");
+        if (found === false) throw new Error("目标有多个下拉菜单，无法确定动作菜单。");
+        if (!found) throw new Error("请先点击“确定”配置动作菜单。");
+        return found;
+    }
+    function actions(layer) {
+        var remap = layer.property("ADBE Time Remapping");
+        if (!remap || !remap.expressionEnabled) throw new Error("目标尚未配置动作表达式，请先点击“确定”。");
+        var text = remap.expression;
+        var n = /var actionNames = \[([^\r\n]*)\];/.exec(text);
+        var f = /var frameCounts = \[([^\r\n]*)\];/.exec(text);
+        var l = /var loopSettings = \[([^\r\n]*)\];/.exec(text);
+        if (!n || !f || !l) throw new Error("不能读取此图层的动作配置，请使用本脚本重新配置。");
+        var names = [], match, re = /"((?:\\.|[^"\\])*)"/g;
+        while ((match = re.exec(n[1])) !== null)
+            names.push(match[1].replace(/\\(["\\nr])/g, function(all, c) {
+                return c === "n" ? "\n" : c === "r" ? "\r" : c;
+            }));
+        var frames = f[1].split(","), loops = l[1].split(","), result = [];
+        if (!names.length || frames.length !== names.length || loops.length !== names.length)
+            throw new Error("动作配置不完整。");
+        for (var i = 0; i < names.length; i++) {
+            var count = Number(frames[i]);
+            var loop = loops[i].replace(/\s/g, "");
+            if (!isFinite(count) || count < 1 || count !== Math.floor(count) || !/^(true|false)$/.test(loop))
+                throw new Error("动作帧数或循环设置无效。");
+            result.push({name: names[i], frames: String(count), loop: loop === "true"});
+        }
+        return result;
+    }
+    function switchAction(comp, layer, index, rows) {
+        var configured = actions(layer);
+        if (index < 0 || index >= configured.length) throw new Error("动作不存在。");
+        if (rows.length !== configured.length) throw new Error("列表已修改，请先点击“确定”或“更新”。");
+        for (var i = 0; i < rows.length; i++) {
+            if (rows[i].name.replace(/^\s+|\s+$/g, "") !== configured[i].name ||
+                    Number(rows[i].frames) !== Number(configured[i].frames) || rows[i].loop !== configured[i].loop)
+                throw new Error("列表与已配置动作不同，请先点击“确定”或“更新”。");
+        }
+        var menu = dropdown(layer).property(1);
+        if (layer.locked || menu.expressionEnabled) throw new Error("请解锁目标图层并关闭菜单表达式。");
+        var time = comp.time;
+        if (time < layer.inPoint || time >= layer.outPoint) throw new Error("当前时间不在目标图层范围内。");
+        var action = configured[index], end = time + Number(action.frames) * comp.frameDuration;
+        var markers = layer.property("ADBE Marker"), collision = false;
+        // Preserve manually created markers, including those at the exact end time.
+        if (!action.loop) for (var k = 1; k <= markers.numKeys; k++) {
+            if (Math.abs(markers.keyTime(k) - end) < 0.00001 &&
+                    markers.keyValue(k).comment.indexOf(markerPrefix) !== 0) collision = true;
+        }
+        app.beginUndoGroup("切换动作并标记起止");
+        var startCollision = false;
+        try {
+            menu.setValueAtTime(time, index + 1);
+            var key = menu.nearestKeyIndex(time);
+            menu.setInterpolationTypeAtKey(key, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD);
+            for (var k = markers.numKeys; k >= 1; k--)
+                if (markers.keyValue(k).comment.indexOf(markerPrefix) === 0) markers.removeKey(k);
+            // Keep the history of action starts. Only replace our own start at the same time.
+            for (var k = 1; k <= markers.numKeys; k++) {
+                if (Math.abs(markers.keyTime(k) - time) < 0.00001) {
+                    var existing = markers.keyValue(k);
+                    var parameters = existing.getParameters();
+                    if (parameters.SequenceActionerStart !== "1") startCollision = true;
+                }
+            }
+            if (!startCollision) {
+                var start = new MarkerValue(action.name);
+                // Label 0 is the neutral white/default marker, not a colored label.
+                try { start.label = 0; } catch (e) {}
+                start.setParameters({SequenceActionerStart: "1"});
+                markers.setValueAtTime(time, start);
+            }
+            if (!action.loop && !collision) {
+                var marker = new MarkerValue(markerPrefix + action.name + " · 播放结束");
+                try { marker.label = 1; } catch (e) {}
+                markers.setValueAtTime(end, marker);
+            }
+        } finally { app.endUndoGroup(); }
+        return "已切换：" + action.name + (action.loop ? "（循环）" :
+            " · 结束 " + end.toFixed(3) + " 秒" + (collision ? "（已有手动标记，未覆盖）" : "")) +
+            (startCollision ? "\n开始点已有手动标记，未覆盖。" : "") +
+            (!action.loop && end >= Math.min(comp.duration, layer.outPoint) ? "\n结束点超出图层或合成范围，请延长时间轴。" : "");
+    }
+    function manifest(file) {
+        var lines = read(file).split(/\r?\n/);
+        if (lines[0] !== "SequenceActionerPreset|1") throw new Error("不是有效的序列帧预设。");
+        var data = {rows: [], footage: []};
+        for (var i = 1; i < lines.length; i++) {
+            var p = lines[i].split("|");
+            if (p[0] === "NAME") data.name = decodeURIComponent(p[1]);
+            if (p[0] === "ROOT") data.token = p[1];
+            if (p[0] === "FPS") data.fps = Number(p[1]);
+            if (p[0] === "PROJECT") data.projectName = decodeURIComponent(p[1]);
+            if (p[0] === "ACTION") data.rows.push({name: decodeURIComponent(p[1]), frames: p[2], loop: p[3] === "1"});
+            if (p[0] === "MEDIA") data.footage.push({tag: p[1], path: decodeURIComponent(p[2]), sequence: p[3] === "1"});
+        }
+        if (!data.name || !/^SA_\d+_\d+$/.test(data.token) || !data.rows.length || data.rows.length > 20 || !(data.fps > 0))
+            throw new Error("预设信息不完整。");
+        if (data.projectName && (!/\.aep$/i.test(data.projectName) ||
+                /[\\\/:*?"<>|\x00-\x1F]/.test(data.projectName) || /^\./.test(data.projectName)))
+            throw new Error("预设工程文件名无效。");
+        return data;
+    }
+    function presetProjectName(name) {
+        var safe = name.replace(/[\\\/:*?"<>|\x00-\x1F]/g, "_").replace(/^[ .]+|[ .]+$/g, "");
+        if (/\.aep$/i.test(safe)) safe = safe.substring(0, safe.length - 4).replace(/[ .]+$/g, "");
+        if (!safe || /^\.+$/.test(safe)) safe = "预设";
+        if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(safe)) safe = "_" + safe;
+        // Keep paths manageable; manifest still preserves the full display name.
+        if (safe.length > 80) safe = safe.substring(0, 80);
+        return safe + ".aep";
+    }
+    function mediaFiles(item) {
+        if (item.useProxy) throw new Error("预设暂不支持代理素材，请关闭代理：" + item.name);
+        if (item.footageMissing) throw new Error("素材丢失：" + item.name);
+        if (!item.file) return null; // Solids are embedded in the AE project.
+        var file = item.file;
+        if (!file.exists || item.footageMissing) throw new Error("素材丢失：" + file.fsName);
+        var sequence = !item.mainSource.isStill && /\.(png|jpe?g|tiff?|tga|bmp|exr)$/i.test(file.name);
+        if (!sequence) return {files: [file], sequence: false};
+        var pattern = /^(.*?)(\d+)(\.[^.]+)$/.exec(file.name);
+        if (!pattern) throw new Error("不能识别序列编号：" + file.name);
+        var prefix = pattern[1], digits = pattern[2].length, ext = pattern[3];
+        var start = Number(pattern[2]), count = Math.max(1, Math.round(item.duration / item.frameDuration));
+        var files = [];
+        for (var i = 0; i < count; i++) {
+            var number = String(start + i);
+            while (number.length < digits) number = "0" + number;
+            var frame = new File(file.parent.fsName + "/" + prefix + number + ext);
+            if (!frame.exists) throw new Error("缺少序列帧：" + frame.fsName);
+            files.push(frame);
+        }
+        return {files: files, sequence: true};
+    }
+    function dependencies(comp, seen, result) {
+        if (comp.useProxy) throw new Error("预设暂不支持合成代理，请关闭代理：" + comp.name);
+        var key = "i" + comp.id;
+        if (seen[key]) return;
+        seen[key] = true;
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var source = comp.layer(i).source;
+            if (source instanceof CompItem) dependencies(source, seen, result);
+            else if (source instanceof FootageItem && !seen["i" + source.id]) {
+                seen["i" + source.id] = true;
+                var media = mediaFiles(source);
+                if (media) result.push({id: source.id, media: media});
+            }
+        }
+    }
+    function savePreset(folder, name, context, restored) {
+        var comp = context.comp, layer = context.layer, rows = actions(layer), fps = comp.frameRate;
+        if (!(layer.source instanceof CompItem)) throw new Error("请选择配置好的序列帧合成图层。");
+        dropdown(layer);
+        var assets = [];
+        dependencies(layer.source, {}, assets);
+        if (!confirm("保存预设需要先保存当前 AE 工程。\n随后在临时工程副本中打包素材，完成后恢复原工程。\n重新打开工程会清空撤销历史。\n是否继续？")) return false;
+        if (!app.project.file) {
+            if (!app.project.saveWithDialog()) return false;
+        } else app.project.save();
+        var original = new File(app.project.file.fsName);
+        var token = "SA_" + new Date().getTime() + "_" + Math.floor(Math.random() * 1000000000);
+        var pack = new Folder(folder.fsName + "/" + token);
+        if (!pack.create()) throw new Error("无法创建预设目录。");
+        var snapshot = new File(pack.fsName + "/working.aep");
+        var projectName = presetProjectName(name);
+        var project = new File(pack.fsName + "/" + projectName);
+        var wrapper = null, switched = false, finished = false;
+        try {
+            wrapper = app.project.items.addComp(name, comp.width, comp.height, comp.pixelAspect, comp.duration, comp.frameRate);
+            wrapper.comment = token;
+            layer.copyToComp(wrapper);
+            switched = true;
+            app.project.save(snapshot);
+            if (!snapshot.exists) throw new Error("临时工程保存失败。");
+            app.open(snapshot);
+            if (!app.project.file || app.project.file.fsName !== snapshot.fsName)
+                throw new Error("未打开临时工程，打包已停止。");
+            var root = null;
+            for (var i = 1; i <= app.project.numItems; i++)
+                if (app.project.item(i) instanceof CompItem && app.project.item(i).comment === token) root = app.project.item(i);
+            if (!root) throw new Error("不能找到预设合成。");
+            app.project.reduceProject([root]);
+            var lines = ["SequenceActionerPreset|1", "NAME|" + encodeURIComponent(name), "ROOT|" + token, "FPS|" + fps,
+                "AE|" + encodeURIComponent(app.version), "PROJECT|" + encodeURIComponent(projectName)];
+            for (var r = 0; r < rows.length; r++)
+                lines.push("ACTION|" + encodeURIComponent(rows[r].name) + "|" + rows[r].frames + "|" + (rows[r].loop ? "1" : "0"));
+            var copied = 0;
+            for (var i = 1; i <= app.project.numItems; i++) {
+                var item = app.project.item(i);
+                if (!(item instanceof FootageItem)) continue;
+                var media = mediaFiles(item);
+                if (!media) continue;
+                var sub = new Folder(pack.fsName + "/media/" + item.id);
+                var mediaRoot = new Folder(pack.fsName + "/media");
+                if (!mediaRoot.exists && !mediaRoot.create()) throw new Error("无法创建素材目录。");
+                if (!sub.create()) throw new Error("无法创建素材目录。");
+                for (var f = 0; f < media.files.length; f++) {
+                    var target = new File(sub.fsName + "/" + media.files[f].name);
+                    if (!media.files[f].copy(target.fsName)) throw new Error("素材复制失败：" + media.files[f].fsName);
+                    copied++;
+                }
+                var rel = "media/" + item.id + "/" + media.files[0].name;
+                var tag = token + "_media_" + item.id;
+                item.comment = tag;
+                var replacement = new File(pack.fsName + "/" + rel);
+                if (media.sequence) item.replaceWithSequence(replacement, false); else item.replace(replacement);
+                lines.push("MEDIA|" + tag + "|" + encodeURIComponent(rel) + "|" + (media.sequence ? "1" : "0"));
+            }
+            app.project.save(project);
+            write(new File(pack.fsName + "/preset.txt"), lines.join("\n"));
+            finished = true;
+        } finally {
+            if (switched) {
+                app.project.close(CloseOptions.DO_NOT_SAVE_CHANGES);
+                if (!app.open(original)) throw new Error("预设处理结束，但原工程未恢复，请打开：" + original.fsName);
+                restored();
+            } else if (wrapper) { try { wrapper.remove(); } catch (e) {} }
+            if (finished && snapshot.exists) snapshot.remove();
+        }
+        return finished;
+    }
+    function loadPreset(file, destination, localize, onLoaded) {
+        var data = manifest(file), pack = file.parent;
+        var project = new File(pack.fsName + "/" + (data.projectName || "project.aep"));
+        if (!project.exists) throw new Error("预设工程文件丢失。");
+        for (var f = 0; f < data.footage.length; f++) {
+            if (!/^media\/\d+\/[^\/\\]+$/.test(data.footage[f].path)) throw new Error("预设素材路径无效。");
+            if (!new File(pack.fsName + "/" + data.footage[f].path).exists) throw new Error("预设素材缺失：" + data.footage[f].path);
+        }
+        var before = {};
+        for (var i = 1; i <= app.project.numItems; i++) before["i" + app.project.item(i).id] = true;
+        app.beginUndoGroup("加载序列帧预设");
+        try {
+            var imported = app.project.importFile(new ImportOptions(project));
+            var root = null;
+            for (var i = 1; i <= app.project.numItems; i++) {
+                var item = app.project.item(i);
+                if (before["i" + item.id]) continue;
+                if (item instanceof CompItem && item.comment === data.token) root = item;
+                if (item instanceof FootageItem) for (var f = 0; f < data.footage.length; f++) {
+                    var media = data.footage[f];
+                    if (item.comment === media.tag) {
+                        var replacement = new File(pack.fsName + "/" + media.path);
+                        if (media.sequence) item.replaceWithSequence(replacement, false); else item.replace(replacement);
+                    }
+                }
+            }
+            if (!root || root.numLayers !== 1) throw new Error("不能找到预设目标图层。");
+            var target = root.layer(1);
+            // Localize the imported menu-bearing layer even for project-only import.
+            localize(target, data.rows, dropdown(target).name);
+            if (destination instanceof CompItem) {
+                target.copyToComp(destination);
+                target = destination.layer(1);
+                destination.openInViewer();
+                for (var i = 1; i <= destination.numLayers; i++) destination.layer(i).selected = false;
+                target.selected = true;
+                onLoaded(data.rows, target);
+                return "已添加预设：" + data.name + " → " + destination.name +
+                    (Math.abs(destination.frameRate - data.fps) >= 0.001 ?
+                        "\n当前合成帧率与预设不同，动作播放按当前合成帧率计算。" : "");
+            }
+            // No destination means import only. Do not open a viewer, select timeline
+            // layers or replace the action page's current target.
+            return "已导入预设到当前工程：" + data.name;
+        } finally { app.endUndoGroup(); }
+    }
+    function createUI(tab, getContext, localize, onLoaded, restored, report, isBusy) {
+        tab.orientation = "column";
+        tab.alignChildren = ["fill", "top"];
+        tab.margins = 12;
+        tab.spacing = 10;
+        var header = tab.add("group");
+        header.alignment = ["fill", "top"];
+        var libraryTitle = header.add("statictext", undefined, "我的预设");
+        libraryTitle.alignment = ["fill", "center"];
+        var refresh = header.add("button", undefined, "刷新列表");
+        var pathGroup = tab.add("group");
+        pathGroup.alignment = ["fill", "top"];
+        var pathText = pathGroup.add("statictext", [0, 0, 245, 24], "");
+        pathText.alignment = ["fill", "center"];
+        var choose = pathGroup.add("button", undefined, "选择预设目录");
+        var folder = new Folder(Folder.userData.fsName + "/SequenceActioner/Presets");
+        if (app.settings.haveSetting("SequenceActioner", "presetFolder"))
+            folder = new Folder(app.settings.getSetting("SequenceActioner", "presetFolder"));
+        var parent = new Folder(Folder.userData.fsName + "/SequenceActioner");
+        if (!parent.exists) parent.create();
+        if (!folder.exists) folder.create();
+        var list = tab.add("listbox", [0, 0, 390, 190], [], {
+            numberOfColumns: 3, showHeaders: true,
+            columnTitles: ["预设名称", "动作数", "帧率"],
+            columnWidths: [235, 65, 70]
+        });
+        list.alignment = ["fill", "top"];
+        list.helpTip = "双击预设加载。存在当前合成时添加图层，否则只导入当前工程。";
+        var savePanel = tab.add("panel", undefined, "保存当前配置");
+        savePanel.alignChildren = ["fill", "top"];
+        savePanel.margins = 10;
+        var nameRow = savePanel.add("group");
+        nameRow.alignment = ["fill", "top"];
+        nameRow.add("statictext", undefined, "名称");
+        var name = nameRow.add("edittext", [0, 0, 245, 24], "");
+        name.alignment = ["fill", "center"];
+        name.helpTip = "输入便于识别的角色或动作组名称。";
+        var save = savePanel.add("button", undefined, "保存选中图层");
+        tab.add("statictext", [0, 0, 390, 36],
+            "包含工程、动作配置与素材副本。\n移动或分享时，请复制整个预设文件夹。", {multiline: true});
+        function reload() {
+            var previous = list.selection ? list.selection.presetFile.fsName : "";
+            list.removeAll();
+            list.selection = null;
+            pathText.text = folder.fsName;
+            pathText.helpTip = folder.fsName;
+            var folders = folder.getFiles(function(f) { return f instanceof Folder; });
+            var entries = [];
+            for (var i = 0; i < folders.length; i++) {
+                var file = new File(folders[i].fsName + "/preset.txt");
+                if (!file.exists) continue;
+                try { entries.push({file: file, data: manifest(file)}); } catch (e) {}
+            }
+            entries.sort(function(a, b) {
+                return Number(b.data.token.split("_")[1]) - Number(a.data.token.split("_")[1]);
+            });
+            for (var i = 0; i < entries.length; i++) {
+                var data = entries[i].data, row = list.add("item", data.name);
+                row.subItems[0].text = String(data.rows.length);
+                row.subItems[1].text = String(Math.round(data.fps * 1000) / 1000);
+                row.presetFile = entries[i].file;
+                row.presetData = data;
+                if (row.presetFile.fsName === previous) list.selection = row;
+            }
+            libraryTitle.text = "我的预设 · " + entries.length + " 个";
+            list.helpTip = entries.length ?
+                "双击预设加载。存在当前合成时添加图层，否则只导入当前工程。" :
+                "还没有预设。选中配置好的序列帧合成图层，填写名称后保存。";
+        }
+        choose.onClick = function() {
+            var chosen = Folder.selectDialog("选择预设目录", folder);
+            if (!chosen) return;
+            folder = chosen;
+            app.settings.saveSetting("SequenceActioner", "presetFolder", folder.fsName);
+            reload();
+        };
+        refresh.onClick = reload;
+        save.onClick = function() {
+            try {
+                if (isBusy && isBusy()) throw new Error("智能对齐正在执行，请等待完成。");
+                var presetName = name.text.replace(/^\s+|\s+$/g, "");
+                if (!presetName) throw new Error("请填写预设名称。");
+                var context = getContext();
+                save.enabled = list.enabled = false;
+                report("正在保存预设并复制素材…");
+                if (savePreset(folder, presetName, context, restored)) { reload(); report("已保存预设：" + presetName); }
+            } catch (e) { alert("保存预设失败：\n" + e.toString()); }
+            finally { save.enabled = list.enabled = true; }
+        };
+        list.onDoubleClick = function() {
+            try {
+                if (isBusy && isBusy()) throw new Error("智能对齐正在执行，请等待完成。");
+                if (!list.selection) throw new Error("请选择预设。");
+                report(loadPreset(list.selection.presetFile, app.project.activeItem, localize, onLoaded));
+            } catch (e) { alert("加载预设失败：\n" + e.toString()); }
+        };
+        reload();
+    }
+    return {actions: actions, switchAction: switchAction, createUI: createUI, isDropdownEffect: isDropdownEffect};
+}
+
+// Companion utilities: hidden analysis process and fixed source-canvas bounds.
+function createLayoutUtils() {
+    function temporaryFile(extension) {
+        return new File(Folder.temp.fsName + "/SequenceLayout_" + new Date().getTime() +
+            "_" + Math.floor(Math.random() * 1000000000) + extension);
+    }
+
+    function readText(file) {
+        if (!file || !file.exists) return "";
+        file.encoding = "UTF-8";
+        if (!file.open("r")) return "";
+        var text = file.read().replace(/^\uFEFF/, "");
+        file.close();
+        return text;
+    }
+
+    function fingerprint(comp) {
+        var data = [comp.id, comp.width, comp.height, comp.numLayers];
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var layer = comp.layer(i);
+            var t = layer.property("ADBE Transform Group");
+            data.push(layer.id, layer.source ? layer.source.id : 0, layer.parent ? layer.parent.id : 0,
+                layer.threeDLayer, layer.locked, layer.enabled);
+            if (t) {
+                var names = ["ADBE Position", "ADBE Anchor Point", "ADBE Scale", "ADBE Rotate Z"];
+                for (var j = 0; j < names.length; j++) {
+                    var p = t.property(names[j]);
+                    if (p) data.push(String(p.value), p.numKeys, p.expressionEnabled);
+                }
+            }
+        }
+        return data.join("|");
+    }
+
+    function runHiddenAsync(command, options, onComplete, onError) {
+        var launcher = temporaryFile(".vbs"), doneFile = temporaryFile(".done");
+        var id = "job_" + new Date().getTime() + "_" + Math.floor(Math.random() * 1000000000);
+        if (!$.global.__SequenceLayoutJobs) $.global.__SequenceLayoutJobs = {};
+        var jobs = $.global.__SequenceLayoutJobs;
+        var started = new Date().getTime(), receivedProgress = false;
+        function cleanup() {
+            delete jobs[id];
+            var files = [launcher, doneFile, options.progressFile, options.workerFile];
+            for (var i = 0; i < files.length; i++) {
+                if (files[i]) { try { files[i].remove(); } catch (e) {} }
+            }
+        }
+        function fail(error) {
+            cleanup();
+            onError(error);
+        }
+        function schedule() {
+            app.scheduleTask("$.global.__SequenceLayoutJobs['" + id + "'].poll();", 250, false);
+        }
+        try {
+            launcher.encoding = "UTF-16";
+            if (!launcher.open("w")) throw new Error("Cannot create background launcher.");
+            launcher.write('On Error Resume Next\r\nSet shell = CreateObject("WScript.Shell")\r\n' +
+                'result = shell.Run("' + command.replace(/"/g, '""') + '", 0, True)\r\n' +
+                'launchError = Err.Number\r\nErr.Clear\r\nSet fso = CreateObject("Scripting.FileSystemObject")\r\n' +
+                'Set marker = fso.CreateTextFile("' + doneFile.fsName.replace(/"/g, '""') + '", True)\r\n' +
+                'marker.Write CStr(result) & "|" & CStr(launchError)\r\nmarker.Close\r\n');
+            launcher.close();
+            jobs[id] = {poll: function() {
+                try {
+                    var elapsed = Math.floor((new Date().getTime() - started) / 1000);
+                    var fields = readText(options.progressFile).split("|");
+                    if (fields.length >= 2) {
+                        var completed = parseInt(fields[0], 10), total = parseInt(fields[1], 10);
+                        if (isFinite(completed) && total > 0) {
+                            receivedProgress = true;
+                            if (options.onProgress)
+                                options.onProgress(completed, total, elapsed);
+                        }
+                    }
+                    if (!receivedProgress && options.onWaiting) options.onWaiting(elapsed);
+                    var done = readText(doneFile);
+                    if (done) {
+                        var codes = done.split("|");
+                        if (parseInt(codes[0], 10) !== 0 || parseInt(codes[1], 10) !== 0)
+                            throw new Error("Background analysis failed (exit " + done + ").");
+                        cleanup();
+                        onComplete();
+                        return;
+                    }
+                    if (elapsed > 1800 || (!receivedProgress && elapsed > 120))
+                        throw new Error("Background analysis timed out.");
+                    // One short callback per tick. No loops or sleep keep AE occupied.
+                    schedule();
+                } catch (error) { fail(error); }
+            }};
+            // Shell association dispatches asynchronously; no synchronous command pipe
+            // remains attached to the long-running worker.
+            if (!launcher.execute()) throw new Error("无法启动后台分析，请检查 Windows 的 VBS 脚本关联。");
+            schedule();
+        } catch (error) { fail(error); }
+    }
+
+    function pointToComp(layer, point) {
+        var t = layer.property("ADBE Transform Group");
+        var a = t.property("ADBE Anchor Point").value;
+        var s = t.property("ADBE Scale").value;
+        var p = t.property("ADBE Position").value;
+        var r = t.property("ADBE Rotate Z").value * Math.PI / 180;
+        var x = (point[0] - a[0]) * s[0] / 100;
+        var y = (point[1] - a[1]) * s[1] / 100;
+        return [p[0] + x * Math.cos(r) - y * Math.sin(r),
+            p[1] + x * Math.sin(r) + y * Math.cos(r)];
+    }
+
+    function fit(comp, helper, encode, quote, onComplete, onError) {
+        var entries = [];
+        var positions = [];
+        // Validate before changing dimensions. All layers must translate together.
+        for (var i = 1; i <= comp.numLayers; i++) {
+            var layer = comp.layer(i);
+            var t = layer.property("ADBE Transform Group");
+            var p = t ? t.property("ADBE Position") : null;
+            if (layer.threeDLayer || layer.parent || !p || p.numKeys > 0 || p.expressionEnabled)
+                throw new Error("Auto-fit requires static, unparented 2D positions: " + layer.name);
+            if (p.dimensionsSeparated) {
+                var xp = p.getSeparationFollower(0);
+                var yp = p.getSeparationFollower(1);
+                if (xp.numKeys || yp.numKeys || xp.expressionEnabled || yp.expressionEnabled)
+                    throw new Error("Auto-fit requires static positions: " + layer.name);
+            }
+            var staticTransforms = ["ADBE Anchor Point", "ADBE Scale", "ADBE Rotate Z"];
+            for (var k = 0; k < staticTransforms.length; k++) {
+                var prop = t.property(staticTransforms[k]);
+                if (prop && (prop.numKeys > 0 || prop.expressionEnabled))
+                    throw new Error("Auto-fit requires static anchor, scale and rotation: " + layer.name);
+            }
+            positions.push({layer: layer, value: p.value, locked: layer.locked});
+            if (layer.nullLayer || layer.adjustmentLayer || !layer.hasVideo) continue;
+            var source = layer.source;
+            if (!source) throw new Error("Auto-fit cannot measure this layer: " + layer.name);
+            // All frames share the source canvas. No PNG decoding is needed.
+            var entry = {layer: layer, bounds: [0, 0, source.width, source.height]};
+            entries.push(entry);
+        }
+        if (!entries.length) throw new Error("No image layers to fit.");
+
+        var initialState = fingerprint(comp);
+        function finish(text) {
+            try {
+                if (fingerprint(comp) !== initialState)
+                    throw new Error("分析期间合成或图层发生变化，已取消自动适配。请重新运行。");
+                var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+                for (var i = 0; i < entries.length; i++) {
+                    var entry = entries[i], b = entry.bounds;
+                    if (b[2] <= 0 || b[3] <= 0) continue;
+                    var corners = [[b[0], b[1]], [b[0] + b[2], b[1]],
+                        [b[0], b[1] + b[3]], [b[0] + b[2], b[1] + b[3]]];
+                    for (var j = 0; j < corners.length; j++) {
+                        var point = pointToComp(entry.layer, corners[j]);
+                        minX = Math.min(minX, point[0]); minY = Math.min(minY, point[1]);
+                        maxX = Math.max(maxX, point[0]); maxY = Math.max(maxY, point[1]);
+                    }
+                }
+                if (!isFinite(minX) || !isFinite(minY) || !isFinite(maxX) || !isFinite(maxY))
+                    throw new Error("No valid source dimensions found.");
+                // One pixel of guard space protects antialiased edges after transforms.
+                var left = Math.floor(minX) - 1, top = Math.floor(minY) - 1;
+                var width = Math.max(4, Math.ceil(maxX) + 1 - left);
+                var height = Math.max(4, Math.ceil(maxY) + 1 - top);
+                if (width > 30000 || height > 30000) throw new Error("Content exceeds AE's 30000-pixel size limit.");
+                app.beginUndoGroup("自动适配合成尺寸");
+                try {
+                comp.width = width;
+                comp.height = height;
+                for (var i = 0; i < positions.length; i++) {
+                    var saved = positions[i];
+                    try {
+                        saved.layer.locked = false;
+                        var p = saved.layer.property("ADBE Transform Group").property("ADBE Position");
+                        if (p.dimensionsSeparated) {
+                            p.getSeparationFollower(0).setValue(saved.value[0] - left);
+                            p.getSeparationFollower(1).setValue(saved.value[1] - top);
+                        } else p.setValue([saved.value[0] - left, saved.value[1] - top]);
+                    } finally { saved.layer.locked = saved.locked; }
+                }
+
+                } finally { app.endUndoGroup(); }
+                onComplete(width + " × " + height);
+            } catch (error) { onError(error); }
+        }
+        finish("");
+    }
+    return {runHiddenAsync: runHiddenAsync, fit: fit, fingerprint: fingerprint};
+}
 
     // ================================================
     // 显示窗口
     // ================================================
-    win.center();
-    win.show();
-})();
+    function collectButtons(container, buttons) {
+        var children = container.children;
+        if (!children) return;
+        for (var i = 0; i < children.length; i++) {
+            var child = children[i];
+            if (child.type === "button") buttons.push(child);
+            else collectButtons(child, buttons);
+        }
+    }
+    function setUniformButtonWidths(container) {
+        var buttons = [], width = 120;
+        collectButtons(container, buttons);
+        // Include the directory label and sufficient padding, using the actual UI font.
+        // Longer labels must also fit without changing the shared width.
+        for (var i = 0; i < buttons.length; i++) {
+            try {
+                var measured = buttons[i].graphics.measureString(buttons[i].text);
+                width = Math.max(width, Math.ceil(measured[0]) + 24);
+            } catch (e) {}
+        }
+        for (var i = 0; i < buttons.length; i++) {
+            var button = buttons[i], height = button.size.height;
+            if (!(height > 0)) height = 24;
+            var buttonWidth = width;
+            if (button.text === "切换") {
+                buttonWidth = 40;
+                try { buttonWidth = Math.ceil(button.graphics.measureString("切换")[0]) + 16; } catch (e) {}
+            }
+            button.alignment = ["left", "center"];
+            button.minimumSize = [buttonWidth, height];
+            button.maximumSize = [buttonWidth, height];
+            button.preferredSize = [buttonWidth, height];
+            button.size = [buttonWidth, height];
+            button.helpTip = button.helpTip || button.text;
+        }
+        var switchSize = actionRows[0].switchButton.preferredSize;
+        var switchWidth = switchSize.width || switchSize[0];
+        switchHeader.minimumSize = [switchWidth, 20];
+        switchHeader.maximumSize = [switchWidth, 20];
+        switchHeader.preferredSize = [switchWidth, 20];
+    }
+    win.layout.layout(true);
+    setUniformButtonWidths(win);
+    win.layout.layout(true);
+    if (!isDocked) { win.center(); win.show(); }
+    else win.layout.resize();
+    watchSelection();
+})(this);

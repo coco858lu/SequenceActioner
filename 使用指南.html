@@ -133,276 +133,167 @@
 <div class="container">
 
 <h1>序列帧动作控制脚本</h1>
-<p class="subtitle">After Effects ExtendScript · 动作切换、智能对齐与预设库 · 中英文 AE</p>
+<p class="subtitle">当前单文件版 · 中英文 AE 通用 · 可停靠面板 · 智能对齐与预设库</p>
 
-<h2>一、脚本简介</h2>
-<p>
-  这是一个用于 <strong>Adobe After Effects</strong> 的 ExtendScript（JSX）脚本。
-  它能够将一个序列帧合成（包含多层序列帧的预合成）中的每一层读取为独立的"动作"，
-  生成一个<strong>下拉菜单控件</strong>，并自动在目标图层上写入<strong>时间重映射（Time Remap）表达式</strong>，
-  实现通过切换菜单来切换不同的序列帧动作。
-</p>
-
+<h2>一、先了解两个合成</h2>
+<p>脚本将多个动作的图片序列组织成一个可用菜单切换的角色，并支持将角色和素材打包为跨工程预设。</p>
+<table>
+  <tr><th>合成</th><th>用途</th><th>如何创建</th></tr>
+  <tr><td><strong>合成 A：动作素材合成</strong></td><td>每个图层是一组动作序列帧，例如待机、攻击、技能。对齐、排列都在 A 中完成。</td><td>用户新建，将各动作序列帧放入。</td></tr>
+  <tr><td><strong>合成 B：动作控制合成</strong></td><td>A 作为一个图层放入 B，动作菜单和时间重映射表达式添加在这个图层上。</td><td>点击“创建动作控制合成”自动完成。</td></tr>
+</table>
 <div class="tip">
-  <strong>核心流程：</strong>
-  选中序列帧合成 → 读取图层列表 → 编辑动作名称/帧数/循环 → 选中目标图层 → 确定应用
+  <strong>制作并保存预设：</strong><br>
+  导入动作序列帧 → 新建 A 并放入素材 → <strong>需要时智能对齐并等待完成</strong> → 自动排列 → 创建动作控制合成 → 勾选循环 → 确定 → 预设页输入名称 → 保存选中图层。
 </div>
+<div class="tip"><strong>调用已有预设：</strong>进入“预设”页，双击列表中的预设即可加载，不需要重新制作。</div>
 
-<h2>二、适用场景</h2>
-<ul>
-  <li>角色的多个动作（待机、走路、攻击、技能…）放在同一个序列帧合成里，需要在时间轴上自由切换</li>
-  <li>特效序列帧需要按不同状态播放不同片段</li>
-  <li>UI 动画中的多个状态切换</li>
-</ul>
+<h2>二、安装与打开</h2>
+<h3>2.1 只需一个脚本文件</h3>
+<p>使用 <code>SequenceActioner.jsx</code>，同一个文件兼容中文版和英文版 AE。辅助功能和对齐程序均已内置，无需另放 JSX、PS1 文件，也无需选择语言版本。<code>使用指南.html</code> 可用浏览器打开，不参与脚本运行。</p>
+<p>在 AE 的首选项中找到<strong>“脚本和表达式”</strong>，启用<strong>允许脚本写入文件和访问网络</strong>选项。脚本保存预设、生成后台临时程序需要文件写入权限；预设素材保存在本地。</p>
 
-<h2>三、项目准备</h2>
-
-<h3>3.1 脚本安装</h3>
-<p>根据 AE 界面语言选择 <code>SequenceActioner_CN.jsx</code>（中文版）或 <code>SequenceActioner.jsx</code>（英文版）。将主脚本与以下辅助文件放在同一目录，再运行主脚本：</p>
-<table>
-  <tr><th>文件</th><th>用途</th></tr>
-  <tr><td><code>SequenceLayoutUtils.jsx</code></td><td>后台启动、结果检查、面板进度和固定素材尺寸适配</td></tr>
-  <tr><td><code>SequenceAlignHelper.ps1</code></td><td>Windows 后台首帧像素分析</td></tr>
-  <tr><td><code>SequencePresetUtils.jsx</code></td><td>动作切换、结束标记和可移植预设包</td></tr>
-</table>
-<p>在 AE 的“脚本和表达式”设置中允许脚本写入文件。“智能对齐”需要 Windows PowerShell 和 Windows 脚本宿主。旧的 <code>SequenceProgress.ps1</code> 已不再使用。</p>
-<p>脚本可放置在以下任一目录：</p>
-<table>
-  <tr><th>位置</th><th>路径</th><th>说明</th></tr>
-  <tr>
-    <td><strong>ScriptUI Panels</strong></td>
-    <td style="font-size:0.85em"><code>C:\Program Files\Adobe\Adobe After Effects <em>XXXX</em>\Support Files\Scripts\ScriptUI Panels\</code></td>
-    <td>放入后重启 AE，在<strong>"窗口"菜单底部</strong>可直接打开面板</td>
-  </tr>
-  <tr>
-    <td><strong>Scripts 目录</strong></td>
-    <td style="font-size:0.85em"><code>C:\Program Files\Adobe\Adobe After Effects <em>XXXX</em>\Support Files\Scripts\</code></td>
-    <td>放入后通过 <strong>文件 → 脚本</strong> 菜单运行</td>
-  </tr>
-  <tr>
-    <td><strong>任意位置</strong></td>
-    <td>任意文件夹</td>
-    <td>通过 <strong>文件 → 脚本 → 运行脚本文件</strong> 手动选择</td>
-  </tr>
-</table>
-<div class="note">
-  <strong>Mac 用户路径：</strong><br>
-  <code>/Applications/Adobe After Effects <em>XXXX</em>/Scripts/ScriptUI Panels/</code>
-</div>
-
-<h3>3.2 序列帧合成结构</h3>
-<p>你需要先准备一个"序列帧合成"（也叫 Sprite Sheet / Flipbook 合成）：</p>
-<ul>
-  <li>合成中的每一层就是<strong>一个动作</strong>的一帧序列</li>
-  <li>层A（inPoint=0, outPoint=24帧） → 动作"待机"，24帧</li>
-  <li>层B（inPoint=24帧, outPoint=54帧） → 动作"走路"，30帧</li>
-  <li>层C（inPoint=54帧, outPoint=69帧） → 动作"攻击"，15帧</li>
-  <li>……以此类推</li>
-</ul>
-
-<div class="note">
-  <strong>智能对齐限制：</strong>仅支持二维、无父级图层；图层 Position 不能有关键帧或表达式。脚本不会改变锚点。
-</div>
-
-<div class="note">
-  <strong>注意：</strong>脚本会自动跳过以下图层：<br>
-  &bull; 空对象层和调节层<br>
-  &bull; Layer Name 以 <code>*</code> 开头的图层（用于标记不需要的图层）<br>
-  &bull; 同名图层（仅保留第一个）<br>
-  读取后按 <code>inPoint</code> 时间升序排列。
-</div>
-
-<h3>3.3 主合成</h3>
-<p>在主合成中，将序列帧合成作为<strong>一个图层</strong>放入时间轴。脚本会在该图层上添加效果控件和表达式。</p>
-
-<h2>四、操作步骤</h2>
-
-<div class="step">
-  <strong><span class="step-num">1</span> 选中序列帧合成</strong>
-  <p>在 AE 的<strong>项目面板</strong>中，单击选中你准备好的序列帧合成。</p>
-</div>
-
-<div class="step">
-  <strong><span class="step-num">2</span> 运行脚本并读取图层</strong>
-  <p>通过 AE 菜单 <code>文件 → 脚本 → 运行脚本文件</code> 加载脚本。在弹出的面板中点击<strong>"读取图层列表"</strong>按钮。</p>
-  <p>脚本会解析序列帧合成中所有有效图层，显示在列表中。</p>
-</div>
-
-<div class="step">
-  <strong><span class="step-num">3</span> 编辑列表</strong>
-  <p>你可以在面板中直接编辑：</p>
-  <table>
-    <tr><th>列</th><th>说明</th></tr>
-    <tr><td><strong>图层名称</strong></td><td>作为下拉菜单中的选项名，可修改</td></tr>
-    <tr><td><strong>帧数</strong></td><td>该动作包含的总帧数，自动读取，可手动调整</td></tr>
-    <tr><td><strong>循环</strong></td><td>勾选后该动作循环播放；不勾选则播完后停在最后一帧</td></tr>
-  </table>
-</div>
-
-<div class="step">
-  <strong><span class="step-num">4</span> 配置动作</strong>
-  <p>在<strong>时间轴面板</strong>中选中序列帧合成图层，回到脚本面板点击<strong>"确定"</strong>。</p>
-</div>
-
-<div class="step">
-  <strong><span class="step-num">5</span> 智能对齐（可选）</strong>
-  <p>打开包含 PNG 序列帧素材图层的合成，同时选中需要对齐的图层，点击<strong>“智能对齐”</strong>。最上方选中图层作为参考，脚本根据各素材第一帧的不透明内容计算位置偏移。</p>
-  <p>对齐完成后，脚本按当前合成全部素材的<strong>固定画布尺寸</strong>适配合成，并平移所有图层。画布的透明区域会保留；不会扫描全部动画帧，也不会改变锚点。自动适配要求所有图层二维、无父级，且位置、锚点、缩放和旋转没有关键帧或表达式。</p>
-</div>
-
-<div class="step">
-  <strong><span class="step-num">6</span> 切换动作</strong>
-  <p>AE 会自动在目标图层上：</p>
-  <ul>
-    <li>添加一个<strong>下拉菜单控件</strong>（Dropdown Menu Control），选项即你的动作列表</li>
-    <li>启用<strong>时间重映射</strong>并写入表达式</li>
-  </ul>
-  <p>选中主合成中的目标序列帧合成图层，点击动作列表每行前面的<strong>“切换”</strong>，即可在当前时间写入菜单关键帧。非循环动作会生成红色 <code>[序列帧结束]</code> 标记，循环动作会清理旧的自动结束标记。</p>
-  <p>结束标记位于完整播放后的时间点：当前时间 + 动作帧数 × 合成帧时长。用户手动标记会保留；若结束点已有手动标记，脚本会提示并跳过自动标记。若列表参数有未应用修改，先点击“确定”或“更新”。</p>
-  <p>也可直接操作效果控件面板中的菜单。手动移动菜单关键帧、调整帧数或手动切换菜单后，旧结束标记不会动态更新；再次点击行首“切换”即可重新生成。</p>
-</div>
-
-<h2>五、按钮说明</h2>
-<p>“动作控制”分页的下方按钮分为两行：第一行“确定、更新”，第二行“自动排列、智能对齐”。“预设”分页用于保存和加载跨工程预设。</p>
-
-<table>
-  <tr><th>按钮</th><th>功能</th></tr>
-  <tr><td><strong>读取图层列表</strong></td><td>从选中的合成中读取所有有效图层，填充到列表中。已有数据会被覆盖（注意保存修改）</td></tr>
-  <tr><td><strong>确定</strong></td><td>创建下拉菜单 + 启用时间重映射 + 写入表达式（首次配置用）</td></tr>
-  <tr><td><strong>更新</strong></td><td>只更新时间重映射表达式，不动已有控件（修改参数后用）</td></tr>
-  <tr><td><strong>自动排列</strong></td><td>将当前合成中选中的图层在时间线上首尾相接排列，并自动调整合成时长<br><em>（独立功能，与序列帧动作配置无关）</em></td></tr>
-<tr><td><strong>智能对齐</strong></td><td>以最上方选中图层为参考，按序列素材第一帧的不透明内容对齐其他图层，并按素材画布尺寸适配合成</td></tr>
-</table>
-
-<div class="note">
-  <strong>确定 vs 更新 的区别：</strong><br>
-  <strong>确定</strong> 会重新创建下拉菜单控件并写表达式，适合首次配置或需要重建控件时。<br>
-  <strong>更新</strong> 只改写表达式，不会动已有的下拉菜单，适合只改了帧数或循环设置后快速刷新。<br>
-  <em>注意：如果你改了动作名称，需要用"确定"来重建菜单选项。</em>
-</div>
-
-<h2>六、图层名称规则</h2>
-
-<h3>6.1 <code>*</code> 前缀 — 跳过不需要的图层</h3>
-<p>
-  在序列帧合成中，如果某个图层的 <strong>Layer Name</strong> 以 <code>*</code> 开头，
-  脚本读取时会自动跳过该图层，不会出现在动作列表中。
-</p>
-<div class="tip">
-  <strong>用法示例：</strong><br>
-  &bull; <code>*待机-旧版</code> — 临时隐藏旧版动作<br>
-  &bull; <code>*技能特效-火焰</code> — 技能特效图层不与动作混排<br>
-  &bull; <code>*备用</code> — 直接标记跳过
-</div>
-<p>
-  这对于管理大量图层非常实用：你可以把所有技能特效、备选动作等以 <code>*</code> 开头命名，
-  不会干扰正常动作列表的读取，也不需要在合成中删除它们。
-</p>
-
-<h3>6.2 <code>!</code> 前缀 — 临时禁用循环</h3>
-<p>
-  即使某个动作在列表中勾选了循环，你也可以在<strong>下拉菜单的关键帧值</strong>中
-  通过在动作名前加 <code>!</code> 前缀来<strong>临时禁用循环</strong>。
-</p>
-<p>例如：菜单关键帧值为 <code>!攻击</code>，则该动作将不循环播放（播完停在最后一帧），即便脚本面板中勾选了循环。</p>
-<p>
-  <em>注意：</em><code>!</code> 前缀只在下拉菜单关键帧值中起作用，不影响脚本面板中的循环勾选设置。
-</p>
-
-<h2>七、表达式逻辑说明</h2>
-<p>脚本生成的时间重映射表达式核心逻辑如下：</p>
-
-<pre><code>// 1. 读取下拉菜单当前值（支持关键帧）
-var menu = effect("下拉菜单控件")("菜单");
-
-// 2. 帧数和循环配置（直接硬编码，无需额外 Slider）
-var frameCounts = [24, 30, 15];
-var loopSettings = [false, true, false];
-
-// 3. 计算每个动作的起始帧偏移
-var startFrames = [0, 24, 54];
-
-// 4. 根据菜单值找到对应动作索引
-var idx = ...; // 通过菜单名字符串匹配
-
-// 5. 获取切换时间点（菜单最新关键帧的时间）
-var switchTime = ...;
-
-// 6. 计算当前帧
-//    - 循环模式：elapsed / frameDuration % cnt
-//    - 不循环模式：clamp 到最后一帧
-// 7. 返回 (startFrames[idx] + f) * thisComp.frameDuration</code></pre>
-
-<h2>八、预览示例</h2>
-
-<p>执行完成后，你的目标图层上会看到：</p>
-<ul>
-  <li>效果控件面板中新增 <strong>"下拉菜单控件"</strong>，点开可选择动作</li>
-  <li>时间轴中该图层的时间重映射已有表达式</li>
-  <li>给"下拉菜单控件"的"菜单"属性打关键帧，即可在不同时间切换不同动作</li>
-  <li>动作间切换是<strong>瞬间</strong>的（基于关键帧时间），无过渡</li>
-</ul>
-
-<div class="warn">
-  <strong>无法获取时间重映射？</strong><br>
-  如果脚本提示此错误，请手动在目标图层上右键 → <strong>时间 → 启用时间重映射</strong>，然后重新运行脚本。
-</div>
-
-<h2>九、常见问题</h2>
-
-<h3>Q: 图层太多，列表长了怎么办？</h3>
-<p>面板最多显示 <strong>20 行</strong>数据，视口可见 <strong>8 行</strong>。右侧有滚动条可以上下翻页。</p>
-
-<h3>Q: 改了帧数后不生效？</h3>
-<p>修改列表数据后必须点击<strong>"更新"</strong>或<strong>"确定"</strong>重新写入表达式，帧数才会生效。</p>
-
-<h3>Q: 中文版 / 英文版 AE 有什么区别？</h3>
-<p>脚本提供两个版本：</p>
-<ul>
-  <li><code>SequenceActioner_CN.jsx</code> — 适配中文版 AE（菜单属性名用"菜单"，Slider 用"滑块"）</li>
-  <li><code>SequenceActioner.jsx</code> — 适配英文版 AE（菜单属性名用"Menu"，Slider 用"Slider"）</li>
-</ul>
-
-<h3>Q: 智能对齐支持哪些图层？</h3>
-<p>仅支持二维、无父级、Position 没有关键帧或表达式的图层。锚点、缩放和旋转会保留不变。</p>
-
-<h3>Q: 为什么有些图层没有被对齐？</h3>
-<p>锁定图层、不符合条件的图层、缺失素材或首帧匹配置信度不足的图层会跳过。分析期间修改合成或图层也会取消旧结果。处理进度显示在脚本面板中。</p>
-
-<h3>Q: 空对象层、调节层会被读入吗？</h3>
-<p>不会，脚本会自动跳过 <code>nullLayer</code> 和 <code>adjustmentLayer</code>。</p>
-
-<hr>
-
-<h2>十、技术细节</h2>
-<table>
-  <tr><th>项目</th><th>说明</th></tr>
-  <tr><td>表达式类型</td><td>时间重映射表达式（Time Remap）</td></tr>
-  <tr><td>控件</td><td>下拉菜单控件（Dropdown Menu Control），仅一个</td></tr>
-  <tr><td>帧数存储</td><td>直接写入表达式，不创建额外 Slider 控件</td></tr>
-  <tr><td>排序依据</td><td>图层 inPoint 升序</td></tr>
-  <tr><td>去重逻辑</td><td>同名图层仅保留第一个</td></tr>
-  <tr><td>最大支持</td><td>20 个动作</td></tr>
-  <tr><td>兼容性</td><td>需要支持下拉菜单控件的 AE 版本；智能对齐限 Windows。预设工程需要接收方 AE 能够读取保存它的工程版本</td></tr>
-  <tr><td>中文适配</td><td>中文版脚本使用中文属性名；英文版脚本使用对应英文属性名</td></tr>
-  <tr><td>智能对齐</td><td>后台分析第一帧像素；AE 仅负责最终位置和合成尺寸写回</td></tr>
-</table>
-
-<h2>十一、保存和加载预设</h2>
+<h3>2.2 推荐：安装为可停靠面板</h3>
 <ol>
-  <li>在主合成中选中已经配置好动作菜单和时间重映射表达式的序列帧合成图层。列表中修改过的设置先应用到目标图层。</li>
-  <li>打开<strong>“预设”</strong>分页，填写名称，点击<strong>“保存选中图层”</strong>。</li>
-  <li>脚本提示后先保存当前工程。在临时工程副本中，仅保留目标图层依赖的合成，并复制相关素材；完成后自动恢复原工程。工程重新打开会清空撤销历史。保存后重新选中原目标并读取列表。</li>
-  <li>在其他 AE 工程中打开“预设”分页，选择预设，点击<strong>“加载预设”</strong>。同帧率时，目标图层会添加到当前合成；没有打开合成或帧率不同时，会打开预设自带的合成。</li>
+  <li>将 <code>SequenceActioner.jsx</code> 复制到 AE 安装目录的 <code>Scripts/ScriptUI Panels</code> 文件夹。</li>
+  <li>Windows 常见路径：<code>C:\Program Files\Adobe\Adobe After Effects XXXX\Support Files\Scripts\ScriptUI Panels\</code>，其中 <code>XXXX</code> 替换为安装版本。实际安装在其他盘时，以该安装目录为准。</li>
+  <li>重启 AE，从<strong>“窗口”</strong>菜单找到并打开 <code>SequenceActioner</code>。</li>
+  <li>拖动面板标签，将其停靠到 AE 工作区。停靠后可和其他面板一起调整布局。</li>
 </ol>
-<p>默认目录为用户数据目录中的 <code>SequenceActioner/Presets</code>，两个语言版本共享该目录。可通过<strong>“选择预设目录”</strong>指定其他目录，点击“刷新列表”重新读取。</p>
+<h3>2.3 无需安装：独立窗口运行</h3>
+<p>脚本也可以放在任意文件夹，通过<strong>“文件 → 脚本 → 运行脚本文件”</strong>选择 <code>SequenceActioner.jsx</code>。这种方式打开的是独立窗口，不是可停靠面板。</p>
+<div class="note"><strong>更新脚本：</strong>替换原 JSX 后，关闭旧面板并重新加载；安装在 ScriptUI Panels 中的版本可重启 AE 后打开。若电脑保留了多份脚本，确认打开的是更新后的那一份。</div>
+<div class="warn"><strong>智能对齐的运行环境：</strong>目前使用 Windows PowerShell 和 Windows 脚本宿主，限 Windows。分析程序会释放到临时目录并隐藏运行，完成后清理；不用单独打开 PowerShell，也没有独立的进度窗口。</div>
+
+<h2>三、从序列帧制作预设</h2>
+<div class="step">
+  <strong><span class="step-num">1</span> 导入各动作序列帧</strong>
+  <p>分别将待机、攻击、技能等图片序列导入 AE，每个动作导入为一组<strong>图片序列素材</strong>，不要将每张 PNG 单独导入为一个动作图层。</p>
+  <p>给各动作取容易识别、互不重复的名称。素材解释帧率与合成 A 的帧率建议保持一致，避免读取帧数和播放节奏不符合预期。</p>
+</div>
+<div class="step">
+  <strong><span class="step-num">2</span> 新建合成 A，放入动作素材</strong>
+  <p>新建一个动作素材合成 A，将不同动作的序列帧放入，每个动作对应一个图层。确认每个图层保留了该动作完整的播放范围。</p>
+</div>
+<div class="step">
+  <strong><span class="step-num">3</span> 智能对齐并等待完成（可选）</strong>
+  <p><strong>如果动作已经对齐，可以跳过这一步。</strong>需要对齐时，在 A 中选中需要处理的序列帧图层，点击<strong>“智能对齐”</strong>。至少选中两个图层，时间轴中最上方的选中图层作为参考。</p>
+  <p>脚本只分析各素材的<strong>第一帧</strong>，结合不透明轮廓、颜色纹理及跨动作核验计算位置偏移。进度条显示在“创建动作控制合成”按钮下方，状态文字显示阶段和已用时间。</p>
+  <p>等待完成后再排列。分析期间不要修改正在处理的合成或图层。无法可靠匹配的图层会跳过并提示原因，不会强行移动。</p>
+  <p>对齐完成后，会按合成全部素材的<strong>画布尺寸</strong>自动适配合成大小，让图层画布进入视窗范围；透明留白也计入画布，不是按不透明区域裁切。</p>
+</div>
+<div class="step">
+  <strong><span class="step-num">4</span> 自动排列</strong>
+  <p>在 A 中选中参与动作菜单的序列帧图层，点击<strong>“自动排列”</strong>。至少选中两个图层，脚本按选中图层的时间轴图层顺序将动作首尾相接，从零秒开始排列，并调整 A 的时长。</p>
+  <p>需要调整动作顺序时，先调整图层在时间轴中的上下顺序。只排列参与菜单的动作，不要把空对象、调节层、辅助图层或备用素材混入选中范围。</p>
+</div>
+<div class="step">
+  <strong><span class="step-num">5</span> 创建动作控制合成 B</strong>
+  <p>保持 A 为当前打开或选中的合成，点击<strong>“创建动作控制合成”</strong>。脚本会：</p>
+  <ul>
+    <li>新建 B，继承 A 的尺寸、像素比例、帧率和时长。</li>
+    <li>将 A 放入 B，并打开 B、选中对应图层。</li>
+    <li>自动读取 A 内的动作，显示到动作列表，不需要手动读取。</li>
+  </ul>
+  <p>B 命名为 <code>A的名称_动作控制</code>，遇到重名会追加编号，不覆盖已有合成。此按钮不改变 A 的图层，也不自动配置菜单或勾选循环。</p>
+</div>
+<div class="step">
+  <strong><span class="step-num">6</span> 勾选循环，点击确定</strong>
+  <p>在列表中勾选需要循环的动作，例如待机、走路；不循环的攻击、技能等保持未勾选。检查动作名称和帧数后，点击<strong>“确定”</strong>。</p>
+  <p>首次配置时，脚本会在 B 中的 A 图层上创建动作下拉菜单，启用时间重映射并写入表达式。循环动作反复播放；非循环动作播放完后停在最后一帧。</p>
+</div>
+<div class="step">
+  <strong><span class="step-num">7</span> 输入名称，保存预设</strong>
+  <p>保持 B 中已配置好的 A 图层被选中，进入<strong>“预设”</strong>分页，在“保存当前配置”中输入预设名称，点击<strong>“保存选中图层”</strong>完成保存预设。</p>
+  <p>例如输入“孙策”，新预设包中的工程文件名为 <code>孙策.aep</code>。脚本会打包动作设置、工程结构和相关素材副本，成功后列表中出现该预设。</p>
+</div>
+<div class="warn">
+  <strong>保存预设前请注意：</strong>脚本会提示先保存当前 AE 工程，随后打开临时工程副本进行打包，再恢复原工程。重新打开工程会清空撤销历史，请确认当前修改可保存后再继续。素材复制和工程保存期间可能需要等待。
+</div>
+<div class="note">
+  <strong>智能对齐限制：</strong>序列帧图层需二维、无父级、未锁定，Position 没有关键帧或表达式。锚点不会被修改；自动适配还要求合成内图层的位置、锚点、缩放和旋转为静态。对齐只读取首帧，<strong>保存预设则会复制完整序列</strong>，以便跨工程正常播放。
+</div>
+
+<h2>四、界面与按钮说明</h2>
+<p>脚本有<strong>“动作控制”</strong>和<strong>“预设”</strong>两个分页。动作控制页的“选中合成”区域只显示当前源合成信息，没有操作按钮。</p>
+<h3>4.1 动作控制页</h3>
+<p>动作列表下方依次是：第一行<strong>确定、更新</strong>；第二行<strong>智能对齐、自动排列</strong>；下一行<strong>创建动作控制合成</strong>；最后是进度条。</p>
 <table>
-  <tr><th>预设包内容</th><th>说明</th></tr>
-  <tr><td><code>project.aep</code></td><td>目标图层、动作菜单、表达式、关键帧、标记及依赖合成</td></tr>
-  <tr><td><code>preset.txt</code></td><td>预设版本、名称、帧率、AE 版本、动作设置及素材对应关系</td></tr>
-  <tr><td><code>media/</code></td><td>相关素材副本，序列帧会复制完整序列，以便跨工程播放</td></tr>
+  <tr><th>按钮／区域</th><th>功能与使用条件</th></tr>
+  <tr><td><strong>切换</strong>（每行动作前）</td><td>在当前时间切换该动作，写入保持型菜单关键帧，并添加开始标记；非循环动作还添加结束标记。需要目标图层已经配置好菜单。</td></tr>
+  <tr><td><strong>确定</strong></td><td>首次配置动作菜单、启用时间重映射并写入表达式。已有菜单时读取并复用，不会自动重建全部菜单选项。</td></tr>
+  <tr><td><strong>更新</strong></td><td>将当前列表的动作名称、帧数、循环设置写入时间重映射表达式，不重建动作菜单。通常用于调整帧数或循环后应用修改。</td></tr>
+  <tr><td><strong>智能对齐</strong></td><td>在 A 中选中至少两个序列帧图层，以最上方选中图层为参考分析首帧、调整位置，并自动适配合成画布。</td></tr>
+  <tr><td><strong>自动排列</strong></td><td>在 A 中将选中的动作图层首尾相接排列，自动调整合成时长。</td></tr>
+  <tr><td><strong>创建动作控制合成</strong></td><td>在 A 中一键新建 B、放入 A、打开 B、选中图层并读取动作列表。不要在已创建的 B 中再次使用，以免重复嵌套。</td></tr>
+  <tr><td><strong>进度条</strong></td><td>显示智能对齐的处理进度。完成后显示“完成”，失败时状态区给出提示。</td></tr>
 </table>
-<div class="note"><strong>分享或移动预设：</strong>请复制整个预设文件夹，不能只复制 AEP。预设不包含第三方插件或字体。代理素材暂不支持打包，请关闭代理；素材或序列帧缺失时会停止保存。素材复制及工程保存、恢复期间可能需要等待。</div>
+<p>切换选中不同的序列帧合成图层时，“选中合成”和动作列表自动更新，<strong>没有“读取图层列表”按钮</strong>。列表最多 20 个动作，视口显示 8 行，其余通过右侧滚动条查看。</p>
+<div class="note"><strong>编辑与应用：</strong>未点击“确定”或“更新”的列表编辑，不会立即改变目标图层。切换目标时编辑会在当前面板会话内暂存，切回来时恢复；关闭面板或重新打开工程后不保留。首次配置后建议保持动作名称和顺序稳定；修改菜单选项与只更新表达式是不同操作。</div>
+
+<h3>4.2 预设页</h3>
+<p>列表按<strong>预设名称、动作数、帧率</strong>三列显示，新保存的预设优先显示。单击选中，<strong>双击加载</strong>；没有“预设详情”区域和“加载预设”按钮。</p>
+<table>
+  <tr><th>操作</th><th>用途</th></tr>
+  <tr><td><strong>双击预设列表</strong></td><td>导入预设的工程与素材；有当前合成时，将带动作菜单的序列帧合成图层添加进去。</td></tr>
+  <tr><td><strong>刷新列表</strong></td><td>重新读取预设目录。手动复制进来的预设可通过刷新显示。</td></tr>
+  <tr><td><strong>选择预设目录</strong></td><td>切换预设库保存／读取位置，所选目录会被记住。</td></tr>
+  <tr><td><strong>保存选中图层</strong></td><td>将当前选中且已配置的序列帧合成图层保存为预设。先填写名称，并应用列表中尚未保存的设置。</td></tr>
+</table>
+
+<h2>五、双击调用预设</h2>
+<ol>
+  <li>打开要使用预设的 AE 工程。</li>
+  <li>需要将角色直接加入某个合成时，先打开或选中该合成。</li>
+  <li>进入脚本<strong>“预设”</strong>页，双击需要的预设。</li>
+  <li>预设图层加入当前合成后，可通过动作菜单或列表行前的“切换”使用动作，不需要再次创建控制合成或点击“确定”进行首次配置。</li>
+</ol>
+<table>
+  <tr><th>加载时的状态</th><th>结果</th></tr>
+  <tr><td>有当前打开／选中的合成</td><td>导入相关工程和素材，将预设中带动作菜单的序列帧合成图层添加到当前合成，并选中该图层。</td></tr>
+  <tr><td>没有当前合成</td><td>只将预设导入当前工程，不自动打开预设合成。可稍后在项目面板中找到并使用。</td></tr>
+  <tr><td>当前合成帧率与预设不同</td><td>仍添加到当前合成，并提示动作按当前合成帧率计算。帧数相同但播放时长可能变化。</td></tr>
+</table>
+<p>旧版工程文件名为 <code>project.aep</code> 的预设仍可加载。不要只改包内 AEP 文件名；新预设的工程名及路径由配置文件记录。</p>
+
+<h2>六、动作切换与时间轴标记</h2>
+<p>选中已配置的序列帧合成图层，将时间指针放在需要切换的位置，点击对应动作行前的<strong>“切换”</strong>。</p>
+<ul>
+  <li>当前时间写入动作菜单关键帧，使用保持型插值，动作立即切换。</li>
+  <li>开始处添加<strong>白色标记</strong>，只显示动作名称。</li>
+  <li>非循环动作在完整播放结束处添加<strong>红色标记</strong>，文本以 <code>[序列帧结束]</code> 开头。</li>
+  <li>后续切换只清理旧的自动结束标记，保留以前的开始标记；同一时间再次切换会更新该处脚本生成的开始标记。</li>
+  <li>同一时间已有手动标记时，不覆盖手动标记，并提示原因。</li>
+</ul>
+<p>结束位置 = 切换时间 + 动作帧数 × 当前合成帧时长。结束位置超出图层或合成范围时会提示，必要时手动延长时间轴。</p>
+<div class="note"><strong>标记不是动态表达式：</strong>直接改效果控件菜单、移动菜单关键帧或修改动作帧数，不会让旧标记自动跟随。需要同步标记时，在正确时间再次点击行前“切换”。</div>
+
+<h2>七、预设文件与素材管理</h2>
+<p>默认预设库位于用户数据目录下的 <code>SequenceActioner/Presets</code>，不同 AE 工程共享这一预设库。可通过“选择预设目录”使用自己指定的位置。</p>
+<table>
+  <tr><th>每个预设包的内容</th><th>用途</th></tr>
+  <tr><td><code>预设名称.aep</code></td><td>工程结构、动作菜单、表达式、关键帧、标记以及依赖合成。</td></tr>
+  <tr><td><code>preset.txt</code></td><td>显示名称、工程文件名、帧率、动作配置和素材对应关系。</td></tr>
+  <tr><td><code>media/</code></td><td>相关素材副本；图片序列复制完整序列，原素材不被修改。</td></tr>
+</table>
+<p>显示名称可以使用中文。文件名中的系统不支持字符会替换为下划线；预设包使用独立文件夹管理，同名保存不会直接覆盖旧包。</p>
+<div class="warn"><strong>分享、迁移与备份：</strong>复制整个预设文件夹，不能只复制 AEP。素材丢失、序列缺帧或启用代理时可能无法打包，请先修复素材或关闭代理。第三方插件和字体不随预设打包，接收方仍需具备相应环境，并能读取保存预设时的 AE 工程版本。</div>
+
+<h2>八、常见问题</h2>
+<h3>为什么列表没有显示动作？</h3>
+<p>原始素材合成 A 不等于动作控制目标。完成排列后点击“创建动作控制合成”，脚本会进入 B 并读取 A；使用已有角色时，在时间轴中<strong>单选带动作菜单的序列帧合成图层</strong>，等待约一秒自动读取。智能对齐期间自动读取暂停。</p>
+<h3>哪些图层不参与动作列表？</h3>
+<p>空对象、调节层、名称以 <code>*</code> 开头的图层会跳过；同名图层只保留第一个。有效动作按 <code>inPoint</code> 升序读取，最多支持 20 个。名称应唯一，非菜单图层不要参与自动排列。</p>
+<h3>智能对齐没有移动某个动作怎么办？</h3>
+<p>检查二维、无父级、未锁定及静态位置等条件。首帧全透明、画面差异太大或匹配证据不足时会跳过；建议选中同组完整动作进行核验，查看提示中的失败原因。对齐不能保证从任意不同姿势推断出角色基准。</p>
+<h3>为什么改了帧数或循环设置还没生效？</h3>
+<p>编辑列表后，需要点击“更新”或“确定”写入表达式，再切换或预览。调用已保存的预设时加载的是保存时的配置，后来修改的设置需要重新保存预设。</p>
+<h3>为什么保存预设失败？</h3>
+<p>确认选中的是 B 中的 A 图层，已经点击“确定”配置动作菜单，列表修改也已应用。再检查文件写入权限、预设目录是否可写、素材是否完整，以及代理是否关闭。按错误提示处理后重试。</p>
+<h3>保存后为什么撤销历史没了？</h3>
+<p>预设打包会在临时工程中进行，并重新打开原工程；这是当前保存方式的限制。保存前会明确提示，请先保存工作成果。</p>
+<h3>预设加载后循环能播放，但时间轴不够长？</h3>
+<p>新建 B 的时长继承 A，加载到其他合成时也受该合成和图层范围限制。需要更长的演出时，手动延长合成时长和目标图层的播放范围。</p>
 
 </div>
 </body>
