@@ -5,6 +5,16 @@
 // 帧数直接写入表达式，无需 Slider 控件
 // ================================================
 (function(panelHost) {
+    // Dispose previous polling closures before building the replacement docked panel.
+    // AE can invalidate a closed panel while its ExtendScript callbacks remain alive.
+    var previousWatchers = $.global.__SequenceActionerWatchers;
+    if (previousWatchers) {
+        for (var previousId in previousWatchers) {
+            if (!previousWatchers.hasOwnProperty(previousId)) continue;
+            try { previousWatchers[previousId].stop(); } catch (oldWatcherError) {}
+            delete previousWatchers[previousId];
+        }
+    }
     // Single-file edition: property indices and matchNames are independent of AE language.
     if (!String.prototype.trim) {
         String.prototype.trim = function() { return this.replace(/^\s+|\s+$/g, ""); };
@@ -49,6 +59,12 @@
     layerListGroup.spacing = 6;
     layerListGroup.margins = [10, 10, 10, 10];
 
+    var rowCountGroup = layerListGroup.add("group");
+    rowCountGroup.orientation = "row";
+    rowCountGroup.add("statictext", undefined, "显示行数");
+    var rowCountInput = rowCountGroup.add("edittext", [0, 0, 48, 22], "8");
+    rowCountInput.helpTip = "输入 1–64 的整数，按 Enter 或离开输入框后生效。显示更多行需要更高的面板。";
+
     var headerGroup = layerListGroup.add("group");
     headerGroup.orientation = "row";
     headerGroup.alignment = ["fill", "top"];
@@ -58,7 +74,7 @@
     headerGroup.add("statictext", [0, 0, 60, 20], "帧数");
     headerGroup.add("statictext", [0, 0, 40, 20], "循环");
 
-    var MAX_ROWS = 20;
+    var MAX_ROWS = 64;
     var VISIBLE_ROWS = 8;
     var scrollOffset = 0;
     var totalLayerCount = 0;
@@ -82,9 +98,10 @@
     scrollbar.value = 0;
     scrollbar.stepdelta = 1;
 
-    // 只创建 8 行作为视口
+    // Create only the requested editor rows; no hidden 64-row control pool.
     var actionRows = [];
-    for (var r = 0; r < VISIBLE_ROWS; r++) {
+    function appendActionRow() {
+        var r = actionRows.length;
         var row = actionRowsGroup.add("group");
         row.orientation = "row";
         row.alignment = ["fill", "top"];
@@ -107,8 +124,40 @@
         cb.value = false;
         actionRows.push({ row: row, switchButton: switchBtn, nameInput: ni, framesInput: fi, loopCheckbox: cb });
     }
+    for (var r = 0; r < VISIBLE_ROWS; r++) appendActionRow();
 
-    // 把当前 8 行数据写回 layerData，防止编辑丢失
+    rowCountInput.onChange = function() {
+        var text = this.text.replace(/^\s+|\s+$/g, ""), count = Number(text);
+        if (!/^\d+$/.test(text) || count < 1 || count > MAX_ROWS) {
+            this.text = String(VISIBLE_ROWS);
+            alert("显示行数请输入 1–" + MAX_ROWS + " 的整数。");
+            return;
+        }
+        this.text = String(count);
+        if (count === VISIBLE_ROWS) return;
+        saveViewportToData();
+        var oldCount = VISIBLE_ROWS;
+        var oldSize = [win.size.width || win.size[0], win.size.height || win.size[1]];
+        while (actionRows.length > count) actionRowsGroup.remove(actionRows.pop().row);
+        while (actionRows.length < count) appendActionRow();
+        VISIBLE_ROWS = count;
+        scrollbar.maxvalue = Math.max(0, layerData.length - VISIBLE_ROWS);
+        scrollOffset = Math.max(0, Math.min(scrollOffset, scrollbar.maxvalue));
+        scrollbar.value = scrollOffset;
+        var height = count * 26 - 4;
+        scrollbar.minimumSize = [14, height];
+        scrollbar.maximumSize = [14, height];
+        scrollbar.preferredSize = [14, height];
+        scrollbar.enabled = scrollbar.maxvalue > 0;
+        loadViewportFromData();
+        setUniformButtonWidths(win);
+        win.layout.layout(true);
+        if (!isDocked) win.size = [oldSize[0], Math.max(200, oldSize[1] + (count - oldCount) * 26)];
+        win.layout.resize();
+        repaint();
+    };
+
+    // 把当前可见行数据写回 layerData，防止编辑丢失
     function saveViewportToData() {
         for (var i = 0; i < VISIBLE_ROWS; i++) {
             var dataIdx = scrollOffset + i;
@@ -120,8 +169,9 @@
         }
     }
 
-    // 从 layerData 填充 8 行视口
+    // 从 layerData 填充当前视口
     function loadViewportFromData() {
+        scrollbar.enabled = layerData.length > VISIBLE_ROWS;
         for (var i = 0; i < VISIBLE_ROWS; i++) {
             var dataIdx = scrollOffset + i;
             actionRows[i].switchButton.enabled = dataIdx < layerData.length;
@@ -1087,7 +1137,10 @@
         if (!$.global.__SequenceActionerWatchers) $.global.__SequenceActionerWatchers = {};
         var registry = $.global.__SequenceActionerWatchers;
         for (var old in registry) {
-            if (registry.hasOwnProperty(old)) registry[old].stop();
+            if (registry.hasOwnProperty(old)) {
+                try { registry[old].stop(); } catch (oldWatcherError) {}
+                delete registry[old];
+            }
         }
         var id = "panel_" + new Date().getTime() + "_" + Math.floor(Math.random() * 1000000);
         var task = null, stopped = false;
@@ -1097,14 +1150,21 @@
             delete registry[id];
         }
         function schedule() {
-            if (!stopped) task = app.scheduleTask("$.global.__SequenceActionerWatchers['" + id + "'].poll();", 600, false);
+            if (!stopped) task = app.scheduleTask("if ($.global.__SequenceActionerWatchers && $.global.__SequenceActionerWatchers['" + id + "']) $.global.__SequenceActionerWatchers['" + id + "'].poll();", 600, false);
         }
         registry[id] = {stop: stop, poll: function() {
             if (stopped) return;
             try {
                 followSelection();
             } catch (e) {
-                statusText.text = "自动读取暂未成功：" + e.toString() + "（将自动重试）";
+                // A destroyed host must not throw again while trying to display the first error.
+                try {
+                    if (/object is invalid|invalid object|对象无效|对象是无效/i.test(e.toString())) {
+                        stop();
+                        return;
+                    }
+                    statusText.text = "自动读取暂未成功：" + e.toString() + "（将自动重试）";
+                } catch (invalidPanelError) { stop(); return; }
             }
             schedule();
         }};
@@ -1882,7 +1942,7 @@ function createPresetUtils() {
             if (p[0] === "ACTION") data.rows.push({name: decodeURIComponent(p[1]), frames: p[2], loop: p[3] === "1"});
             if (p[0] === "MEDIA") data.footage.push({tag: p[1], path: decodeURIComponent(p[2]), sequence: p[3] === "1"});
         }
-        if (!data.name || !/^SA_\d+_\d+$/.test(data.token) || !data.rows.length || data.rows.length > 20 || !(data.fps > 0))
+        if (!data.name || !/^SA_\d+_\d+$/.test(data.token) || !data.rows.length || data.rows.length > 64 || !(data.fps > 0))
             throw new Error("预设信息不完整。");
         if (data.projectName && (!/\.aep$/i.test(data.projectName) ||
                 /[\\\/:*?"<>|\x00-\x1F]/.test(data.projectName) || /^\./.test(data.projectName)))
